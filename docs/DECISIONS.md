@@ -59,3 +59,50 @@ a real always-on operator console, plan to replace `ui/app.py` with a
 proper frontend (e.g. a small FastAPI + websocket backend and a JS/React
 frontend) — the `Pipeline`/`FrameResult` interfaces underneath don't need
 to change for that migration.
+
+## 6. Added a real detector backend: pretrained torchvision SSDLite (COCO)
+
+Follow-up to `docs/demo-gap-analysis.md`, which flagged the placeholder
+motion detector as the single biggest credibility risk for a customer
+demo. This adds `detector/torchvision_detector.py` /
+`TorchvisionDetector`, wired into `detector/factory.py` as
+`backend: torchvision`, alongside the existing `motion` and `ultralytics`
+backends — no changes to `BaseDetector`, the tracker, control, UI
+rendering, or telemetry were needed.
+
+**Why this backend, over the already-present Ultralytics adapter:**
+`detector/ultralytics_detector.py` already existed but is AGPL-3.0 and
+needs a commercial license for closed-source production use (entry #2
+above) — an unresolved business decision, not something to default a demo
+onto. `torchvision.models.detection.ssdlite320_mobilenet_v3_large` is
+maintained and distributed by the torchvision project itself under
+BSD-3-Clause, with pretrained COCO weights hosted directly on
+`download.pytorch.org` — there is no separate weight-file license to
+review, unlike third-party weight redistributions. It is also small and
+fast enough for a CPU-only demo laptop: the pretrained weights are a
+~13MB download, and inference measured ~58ms/frame (~17 FPS) on a 640x480
+frame on CPU in this environment.
+
+**Dependency handling:** `torch`/`torchvision` are treated exactly like
+the existing Ultralytics dependency — optional, guarded imports (see the
+`try/except ImportError` in `detector/torchvision_detector.py`), listed as
+commented-out install instructions in `requirements.txt` and as a
+`torchvision` extra in `pyproject.toml`, not part of the core
+`requirements.txt` install. **The default detector backend remains
+`motion`** — a demo laptop that only runs `pip install -r
+requirements.txt` still starts reliably with zero heavy dependencies;
+`torchvision` is opt-in via `--detector torchvision` (CLI) or the
+Streamlit backend dropdown, intended to be the backend actually used
+against curated demo clips once `torch`/`torchvision` are installed.
+
+**Limitations that remain:** COCO has no "drone" class. The detector is
+configured (`DEFAULT_TARGET_CLASSES` in `detector/torchvision_detector.py`)
+to keep only `airplane`, `bird`, and `kite` detections as visual proxies
+for a small aerial target — a real learned-feature detector, but still
+not a drone-specific classifier. It will still miss drones that don't
+resemble those classes and may fire on real birds/kites/planes in frame.
+It is also a materially heavier dependency than the zero-dependency motion
+detector (a multi-hundred-MB `torch` install versus none). Fine-tuning on
+real drone imagery, or licensing a drone-specific model, is the next step
+if detection accuracy on the actual demo clips proves insufficient — see
+`docs/known-limitations.md`.

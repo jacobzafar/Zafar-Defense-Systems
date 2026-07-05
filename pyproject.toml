@@ -12,6 +12,7 @@ dependencies = [
 
 [project.optional-dependencies]
 ultralytics = ["ultralytics>=8.2"]
+torchvision = ["torch>=2.2", "torchvision>=0.17"]
 bytetrack = ["trackers>=0.1", "supervision>=0.24"]
 dev = ["pytest>=8.0"]
 

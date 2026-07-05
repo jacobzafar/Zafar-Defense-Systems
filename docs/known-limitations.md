@@ -1,11 +1,19 @@
 # Known limitations
 
-- **Detection is a placeholder.** `MotionDetector` detects moving blobs via
-  background subtraction, not drones specifically. It will false-positive
-  on any motion (birds, trees, camera shake) and false-negative on
-  stationary or very slow-moving aerial objects. Replacing it with a
-  trained model (RF-DETR/YOLOX recommended, see `docs/DECISIONS.md`) is the
-  clear next step and requires labeled drone data.
+- **Default detection is still a placeholder.** `MotionDetector` (the
+  default backend) detects moving blobs via background subtraction, not
+  drones specifically. It will false-positive on any motion (birds, trees,
+  camera shake) and false-negative on stationary or very slow-moving
+  aerial objects.
+- **The new `torchvision` detector backend is a real object detector, but
+  not a drone classifier either.** It's a pretrained SSDLite MobileNetV3
+  model trained on COCO, which has no "drone" class — it's configured to
+  keep `airplane`, `bird`, and `kite` detections as visual proxies for a
+  small aerial target. This will still miss actual drones that don't
+  resemble those classes, and may fire on real birds/kites/planes in
+  frame. Training or fine-tuning on real drone data (or licensing a
+  drone-specific model) remains the clear next step for detection
+  accuracy; see `docs/DECISIONS.md` entry #6.
 - **No re-identification in the default tracker.** `IoUTracker` will assign
   a new ID to a target that was fully occluded for longer than `max_age`
   frames (default 15). Upgrading to `ByteTrackAdapter` mitigates this
@@ -15,10 +23,13 @@
   spurious motion detections with `MotionDetector`.
 - **Streamlit UI is single-run, single-user.** No concurrent sessions,
   no persistence between runs beyond the JSONL logs on disk.
-- **No performance/throughput claims are made or implied.** Actual FPS
-  depends entirely on hardware and which detector backend is selected; this
-  has not been benchmarked in this environment (no GPU, no sample drone
-  footage available here).
+- **No performance/throughput claims are made or implied for real demo
+  footage.** Actual FPS depends entirely on hardware, resolution, and
+  which detector backend is selected. One data point: the `torchvision`
+  backend measured ~58ms/frame (~17 FPS) on a 640x480 frame on CPU in this
+  development environment — informative, not a guarantee for other
+  hardware or resolutions. No real drone footage has been used to
+  benchmark accuracy in this environment.
 - **Verified installable and runnable.** `pip install -r requirements.txt`,
   `pytest tests/ -v` (9 passed), `scripts/run_pipeline.py` against a
   synthetic video, and `streamlit run ui/app.py` have all been exercised

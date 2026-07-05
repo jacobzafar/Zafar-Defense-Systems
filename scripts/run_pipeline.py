@@ -27,7 +27,7 @@ from ui.overlay import draw_tracks  # noqa: E402
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the detection/tracking pipeline headlessly.")
     parser.add_argument("--source", required=True, help="Video file path, RTSP URL, or webcam index (e.g. 0)")
-    parser.add_argument("--detector", default="motion", choices=["motion", "ultralytics"])
+    parser.add_argument("--detector", default="motion", choices=["motion", "ultralytics", "torchvision"])
     parser.add_argument("--tracker", default="iou", choices=["iou", "bytetrack"])
     parser.add_argument("--weights", default=None, help="Weights path, required if --detector ultralytics")
     parser.add_argument("--save-video", default=None, help="Optional path to write an annotated output video")

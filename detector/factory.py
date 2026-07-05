@@ -32,6 +32,14 @@ def build_detector(config: dict[str, Any] | None = None) -> BaseDetector:
             target_classes=config.get("target_classes"),
         )
 
+    if backend == "torchvision":
+        from detector.torchvision_detector import TorchvisionDetector
+
+        return TorchvisionDetector(
+            confidence_threshold=config.get("confidence_threshold", 0.35),
+            target_classes=config.get("target_classes"),
+        )
+
     raise ValueError(
-        f"Unknown detector backend '{backend}'. Valid options: motion, ultralytics."
+        f"Unknown detector backend '{backend}'. Valid options: motion, ultralytics, torchvision."
     )

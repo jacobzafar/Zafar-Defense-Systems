@@ -14,8 +14,10 @@ none of the interfaces below are designed to be extended toward that.
 ```
 detector/    Frame -> Detection[]. Default backend is a zero-dependency
              motion detector (OpenCV background subtraction) — a
-             placeholder, not a real drone classifier. Optional Ultralytics
-             YOLO adapter included (see licensing note below).
+             placeholder, not a real drone classifier. Optional real
+             (trained) backends: a pretrained torchvision SSDLite
+             detector (permissive license, recommended for demo clips)
+             and an Ultralytics YOLO adapter (see licensing note below).
 tracker/     Detection[] -> Track[] with persistent IDs. Default backend is
              a small dependency-free greedy IoU tracker. Optional ByteTrack
              adapter (Roboflow `trackers`, Apache-2.0) included.
@@ -44,6 +46,9 @@ streamlit run ui/app.py
 # Or run headless on a video file:
 python scripts/run_pipeline.py --source path/to/video.mp4
 
+# Or with the real pretrained detector (needs: pip install torch torchvision):
+python scripts/run_pipeline.py --source path/to/video.mp4 --detector torchvision
+
 # Or on a webcam:
 python scripts/run_pipeline.py --source 0
 
@@ -67,8 +72,14 @@ needs to change.
 **Licensing note:** the optional Ultralytics YOLO detector backend
 (`detector/ultralytics_detector.py`) is AGPL-3.0 and requires a commercial
 license from Ultralytics for closed-source production use — it is not
-enabled by default. See `docs/DECISIONS.md` for the full reasoning and for
-permissively-licensed alternatives (RF-DETR, YOLOX — both Apache-2.0).
+enabled by default. The optional torchvision detector backend
+(`detector/torchvision_detector.py`, `--detector torchvision`) has no such
+issue: it uses a pretrained SSDLite MobileNetV3 model distributed by the
+torchvision project under BSD-3-Clause, and is the recommended "real
+detector" path for demo clips today. See `docs/DECISIONS.md` for the full
+reasoning, including entry #6 on the torchvision backend and its
+limitations (COCO has no "drone" class — it filters to `airplane`,
+`bird`, `kite` as visual proxies).
 
 ## Known limitations
 

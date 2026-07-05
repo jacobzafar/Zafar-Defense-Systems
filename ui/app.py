@@ -35,7 +35,7 @@ st.caption(
 with st.sidebar:
     st.header("Configuration")
     uploaded_file = st.file_uploader("Video file", type=["mp4", "avi", "mov", "mkv"])
-    detector_backend = st.selectbox("Detector backend", ["motion", "ultralytics"], index=0)
+    detector_backend = st.selectbox("Detector backend", ["motion", "torchvision", "ultralytics"], index=0)
     tracker_backend = st.selectbox("Tracker backend", ["iou", "bytetrack"], index=0)
     run_button = st.button("Run pipeline", type="primary", disabled=uploaded_file is None)
 
