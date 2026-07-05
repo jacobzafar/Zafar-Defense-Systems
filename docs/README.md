@@ -29,7 +29,6 @@ The MVP does **not** include:
 
 The current focus is to build the fastest possible end-to-end prototype using a pragmatic mix of:
 
-- open-source building blocks where licensing allows commercial adaptation,
 - custom integration logic,
 - custom testing and documentation,
 - internal iteration based on real demo milestones.
@@ -85,7 +84,6 @@ This project follows a few simple rules:
 
 - Use the fastest path to a working prototype
 - Prefer simple solutions over perfect solutions in the early phase
-- Reuse open-source components where legally and technically appropriate
 - Keep architecture modular from the start
 - Document decisions as they are made
 - Avoid unnecessary complexity in the first iterations
@@ -156,15 +154,7 @@ Examples:
 
 ## Open Source and Licensing
 
-This repository may incorporate or build upon open-source tools, models, or code where licensing allows it. All third-party dependencies and reused repositories should be documented clearly in internal documentation before they are used in core product development.
-
-No external code should be treated as production-ready by default. Any reused component must be evaluated for:
-
-- license compatibility,
-- maintainability,
-- clarity of code,
-- technical fit,
-- commercial suitability.
+This repository may incorporate or build upon open-source tools, models, or code where licensing allows it. 
 
 ## Status
 
@@ -175,8 +165,6 @@ Current objective: **Build a working end-to-end demonstrator as fast as possible
 ## Maintainers
 
 - Jacob Zafar
-- Haron Zafar
-- Omar Zafar
 
 ## Notes
 
