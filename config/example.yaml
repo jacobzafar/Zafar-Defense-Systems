@@ -1,0 +1,22 @@
+# Copy to config/local.yaml and adjust as needed.
+# Not auto-loaded yet (scripts/run_pipeline.py uses CLI flags directly) —
+# this is a reference for the config dicts consumed by the factories.
+
+detector:
+  backend: motion         # motion | ultralytics
+  min_area_px: 150
+  max_area_fraction: 0.25
+  var_threshold: 32.0
+  history: 300
+  # weights_path: "/path/to/weights.pt"   # required if backend: ultralytics
+  # confidence_threshold: 0.35
+  # target_classes: ["drone"]
+
+tracker:
+  backend: iou            # iou | bytetrack
+  iou_threshold: 0.3
+  max_age: 15
+  min_hits_to_confirm: 1
+
+logging:
+  log_dir: logs

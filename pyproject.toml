@@ -1,0 +1,23 @@
+[project]
+name = "zafar-detection-tracking-mvp"
+version = "0.1.0"
+description = "Observation-only drone detection/tracking MVP: video in, detection, tracking, UI, logging. No jamming, no kinetic effects, no autonomy."
+requires-python = ">=3.10"
+readme = "README.md"
+dependencies = [
+    "opencv-python-headless>=4.9,<5",
+    "numpy>=1.26,<2",
+    "streamlit>=1.35",
+]
+
+[project.optional-dependencies]
+ultralytics = ["ultralytics>=8.2"]
+bytetrack = ["trackers>=0.1", "supervision>=0.24"]
+dev = ["pytest>=8.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
