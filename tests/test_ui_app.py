@@ -127,3 +127,45 @@ def test_upload_mode_disables_run_until_a_file_is_provided():
     assert list(at.exception) == []
     assert at.session_state["app_state"] == "idle"
     assert _start_button(at).disabled is True
+
+
+def test_header_shows_the_active_preset():
+    at = AppTest.from_file(APP_PATH)
+    at.run(timeout=30)
+
+    header_markdown = [m.value for m in at.markdown if 'class="zds-header"' in m.value]
+    assert header_markdown
+    assert "PRESET" in header_markdown[0]
+    assert "default" in header_markdown[0]
+
+
+def test_ultralytics_backend_shows_agpl_licensing_warning():
+    at = AppTest.from_file(APP_PATH)
+    at.run(timeout=30)
+
+    at.sidebar.selectbox(key="detector_backend").set_value("ultralytics").run(timeout=30)
+
+    assert list(at.exception) == []
+    warning_texts = [w.value for w in at.sidebar.warning]
+    assert any("AGPL" in text for text in warning_texts)
+
+
+def test_motion_backend_shows_no_licensing_warning():
+    at = AppTest.from_file(APP_PATH)
+    at.run(timeout=30)
+
+    assert list(at.exception) == []
+    assert list(at.sidebar.warning) == []
+
+
+def test_track_lifecycle_events_appear_in_event_log(tmp_path):
+    at = AppTest.from_file(APP_PATH)
+    at.run(timeout=30)
+    at.session_state["log_dir"] = str(tmp_path)
+    at.sidebar.number_input(key="max_frames_widget").set_value(10).run(timeout=30)
+
+    _start_button(at).click().run(timeout=60)
+
+    assert list(at.exception) == []
+    event_lines = at.session_state["event_lines"]
+    assert any("ACQUIRED" in line for line in event_lines)

@@ -240,3 +240,5 @@ See `docs/known-limitations.md` for the full list. Headline items:
 - `docs/known-limitations.md` — what this MVP does not do yet.
 - `docs/demo-gap-analysis.md` — the gap analysis this UI/demo pass was scoped from.
 - `docs/licenses.md` — per-dependency license summary; run `python scripts/license_audit.py` to verify no copyleft package is in the default install path.
+- `docs/coverage-matrix.md` — template for tracking real footage coverage across drone type, lighting/weather, background, range/angle/speed, and EO/IR (currently empty).
+- `docs/demo-runbook.md` — exact steps for a clean live demo and the specific failure modes to avoid.

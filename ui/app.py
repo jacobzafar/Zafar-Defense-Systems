@@ -166,6 +166,12 @@ def _render_sidebar(presets: dict, preset_error: str | None) -> dict:
         )
 
     st.sidebar.selectbox("Detector backend", DETECTOR_BACKENDS, key="detector_backend")
+    if st.session_state.detector_backend == "ultralytics":
+        st.sidebar.warning(
+            "This backend is AGPL-3.0 and requires a commercial license from Ultralytics for "
+            "closed-source production use — see docs/licenses.md before shipping with it.",
+            icon="⚠️",
+        )
     st.sidebar.selectbox("Tracker backend", TRACKER_BACKENDS, key="tracker_backend")
 
     with st.sidebar.expander("Advanced settings", expanded=False):
@@ -328,6 +334,7 @@ def _render_header() -> None:
     state = st.session_state.app_state
     badges = [
         theme.badge(state.upper(), _state_badge_kind(state)),
+        theme.badge(f"PRESET · {st.session_state.get('preset_name', 'default')}", "neutral"),
         theme.badge(f"DET · {st.session_state.detector_backend}", "neutral"),
         theme.badge(f"TRK · {st.session_state.tracker_backend}", "neutral"),
     ]
@@ -410,6 +417,7 @@ def _execute_run(source, source_label, detector_config, tracker_config, log_dir,
     detections_total = 0
     dropped_total = 0
     track_ids: set[int] = set()
+    active_track_ids: set[int] = set()
     last_fps = 0.0
 
     try:
@@ -430,6 +438,20 @@ def _execute_run(source, source_label, detector_config, tracker_config, log_dir,
                 _kpi_html(frame_count, detections_total, len(result.tracks), dropped_total, last_fps, detector.name, tracker.name, source_label),
                 unsafe_allow_html=True,
             )
+
+            # Operator-facing narrative events (target acquired/lost), distinct
+            # from the raw per-frame line below — this is what a demo audience
+            # actually reads, not per-frame counts.
+            current_track_ids = {t.track_id for t in result.tracks}
+            for new_id in sorted(current_track_ids - active_track_ids):
+                st.session_state.event_lines.append(
+                    theme.event_line("completed", "ACQUIRED", f"target #{new_id} — frame {result.frame_index}")
+                )
+            for lost_id in sorted(active_track_ids - current_track_ids):
+                st.session_state.event_lines.append(
+                    theme.event_line("running", "LOST", f"target #{lost_id} — frame {result.frame_index}")
+                )
+            active_track_ids = current_track_ids
 
             if result.dropped:
                 line = theme.event_line("error", "DROPPED", f"frame {result.frame_index} — {result.error or 'unknown error'}")

@@ -400,3 +400,36 @@ impractical to fill in and easy to leave stale.
 in anger yet (only the synthetic smoke test), and the coverage matrix has
 no real entries. Both become useful the moment real footage exists —
 this entry is about the tooling, not about any coverage already achieved.
+
+## 12. Demo readiness pass: UI polish and a demo runbook
+
+**The per-frame video re-seek bug was already fixed** in the earlier
+UI-rebuild pass (entry #7) — `ui/app.py` uses `FrameResult.frame` directly
+and has not reopened/re-seeked a `cv2.VideoCapture` since. Re-verified by
+inspection before starting this priority; no code change was needed for
+that specific item.
+
+**What was actually still rough, and fixed here:** the live event log
+only ever showed raw per-frame counts (`FRAME #42 · 2 det · 2 trk ·
+5.3ms`) — exactly the gap flagged as a remaining recommended improvement
+in entry #7 and never acted on. Added operator-facing narrative events:
+`ACQUIRED`/`LOST` lines when a track ID appears/disappears between
+frames, interleaved with the existing per-frame line rather than
+replacing it. Also added a `PRESET` badge to the header (previously only
+detector/tracker were shown, not which preset was active) and an inline
+AGPL-3.0 licensing warning in the sidebar when the `ultralytics` backend
+is selected — a direct, operator-facing connection to the licensing work
+in entry #8, rather than that information only living in docs. All three
+verified via `AppTest` (`tests/test_ui_app.py`): the preset badge renders,
+the warning appears only for `ultralytics` (not `motion`), and
+`ACQUIRED` events appear in the event log for a short demo-mode run (a
+150-frame run was checked manually too — the events are there, just
+scrolled out of the log's last-40-lines window by frame 150, which is
+expected, not a bug).
+
+**`docs/demo-runbook.md`** is new: a concrete pre-demo checklist, the
+demo script itself, and — the part most runbooks skip — the specific
+failure modes this app is actually known to have (no live Stop control,
+backend/dependency mismatches, the webcam option being server-side not
+browser-side, Streamlit's upload size limit) written from what this repo
+has actually verified about its own behavior, not generic advice.
