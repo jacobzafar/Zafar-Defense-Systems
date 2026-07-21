@@ -100,6 +100,12 @@ def test_missing_optional_dependency_is_a_friendly_error_not_a_crash(tmp_path):
 
 
 def test_drone_backend_with_no_weights_is_a_friendly_error_not_a_crash(tmp_path):
+    # Requires torch: without it, DroneDetector raises ImportError before
+    # ever checking for weights, which is also correctly handled (as
+    # "missing_dependency") but is a different branch than this test targets.
+    pytest.importorskip("torch")
+    pytest.importorskip("torchvision")
+
     at = AppTest.from_file(APP_PATH)
     at.run(timeout=30)
     at.session_state["log_dir"] = str(tmp_path)

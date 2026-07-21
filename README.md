@@ -169,6 +169,16 @@ license confirmation, and local path — no data has been downloaded. See
 `docs/DECISIONS.md` entry #9 and `docs/known-limitations.md` for the full
 status.
 
+**Evaluating a backend (`eval/`):** the only place in this repo that
+computes accuracy numbers — AP@0.5, small-object recall, false-alarm
+rate, latency, track continuity — for a detector, run against a frozen,
+config-declared eval set (`python -m eval.harness --config
+your_eval_config.yaml`). No real eval set ships with this repo; see
+`eval/README.md` for the required layout and the frozen-set policy, and
+`docs/DECISIONS.md` entry #10 for what's been verified so far (the
+harness's own mechanics, via a tiny synthetic fixture — not any real
+accuracy result).
+
 ## Known limitations
 
 See `docs/known-limitations.md` for the full list. Headline items:

@@ -298,3 +298,69 @@ been validated against real drone footage. This entry is infrastructure
 that becomes useful the moment a maintainer supplies real, license-checked
 data — it does not itself claim to detect drones any better than the
 existing placeholders.
+
+## 10. Frozen evaluation harness: the only place accuracy numbers come from
+
+Adds `eval/` — a harness that runs a chosen detector (and tracker, for
+continuity) over a held-out eval set and produces a metric card: AP@0.5,
+small-object recall, false-alarm rate, latency, and track continuity. See
+`eval/README.md` for the full policy; this entry records the design
+decisions and what was actually verified.
+
+**A separate schema from `detector/datasets/`, on purpose.** That
+loader (Priority 3) is single-image-oriented, right for classification-
+style fine-tuning. Track continuity needs ordered *sequences* of frames
+with a stable ground-truth identity across time — closer to how the named
+public anti-UAV benchmarks are actually structured (short tracking
+sequences, not an unordered image bag). `eval/schema.py` defines its own
+`EvalSequence`/`EvalFrame` schema for this reason, not to duplicate
+`detector/datasets/loader.py` gratuitously.
+
+**"Frozen" is enforced technically, not just documented.** A `.frozen`
+marker file in an eval set directory is checked by
+`eval.schema.assert_not_for_training()`, which `detector/train.py` now
+calls before loading any dataset — training refuses to start with a clear
+`EvalSetFrozenError` if the target directory is a frozen eval set. A
+manifest checksum (sha256 of `sequences.json`) can additionally be
+recorded in an eval config's `expected_checksum` and is verified on every
+harness run, catching accidental edits to a supposedly-frozen set. Neither
+guard hashes image pixel data — a swapped image file with the same name
+would not be caught; this is a lightweight integrity check, not a
+cryptographic one.
+
+**Metric definitions were fixed explicitly, not left implicit,** because
+"mAP" and "small object" mean different things in different papers:
+AP@0.5 uses standard all-point (COCO/VOC2010+-style) precision-envelope
+interpolation for a single class (reported as "AP@0.5," not "mAP" — mAP
+implies averaging across classes, which doesn't apply to a single-class
+"drone" problem). Small-object recall uses COCO's own small-object
+convention (area < 32²=1024px², overridable). False-alarm rate is
+reported as false detections per hard-negative frame (not bounded to
+[0,1] — a frame can have more than one false alarm). Track continuity is
+`1 - (ID switches / frames where GT was continuously present)`; a gap
+where the ground-truth target leaves and later returns is not itself
+counted as a switch. All of this is written into `eval/metrics.py`'s
+module docstring so it stays the single definition source.
+
+**Verified, including by hand.** The AP@0.5 implementation was checked
+against a hand-computed 2-GT/3-prediction example (expected 0.8333...,
+`tests/test_eval_metrics.py::test_ap50_matches_hand_computed_example`)
+before anything else was built on top of it, plus perfect-detector (AP=1)
+and no-ground-truth (AP=0) edge cases. The full harness was run
+end-to-end against a synthetic 8-frame eval sequence (6 "drone" frames +
+2 hard-negative "bird" frames) using the zero-dependency `motion`
+detector — chosen deliberately so this harness's own tests need no
+torch/GPU — producing real (if unremarkable, given 8 synthetic frames)
+numbers, a written JSON metric card, and a rendered `REPORT.md` with a
+working "Baseline comparison" section. The `.frozen`-marker training
+guard and the checksum-mismatch guard were both exercised directly
+(attempting to train on the frozen synthetic eval set raises
+`EvalSetFrozenError`; a deliberately wrong checksum raises
+`EvalSetChecksumMismatchError`).
+
+**What remains, honestly:** no real eval set exists in this repo. The
+synthetic fixture proves the harness's mechanics, not any backend's real
+accuracy — see `eval/README.md`'s "What this harness does NOT do" section
+and `docs/known-limitations.md`. `eval/output/` (the harness's generated
+JSON/report) is gitignored specifically so a stale or synthetic-smoke-test
+result can never be mistaken for a current, validated one.

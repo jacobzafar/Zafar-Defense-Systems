@@ -47,6 +47,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import yaml  # noqa: E402
 
 from detector.datasets.loader import ImageSample, load_manifest_dataset  # noqa: E402
+from eval.schema import assert_not_for_training  # noqa: E402
 
 try:
     import numpy as np
@@ -190,6 +191,7 @@ def train(config: TrainConfig) -> dict[str, Any]:
     _require_train_deps()
     set_seed(config.seed)
 
+    assert_not_for_training(config.dataset_dir)
     samples = load_manifest_dataset(config.dataset_dir)
     if not samples:
         raise ValueError(f"No images found in dataset dir: {config.dataset_dir}")

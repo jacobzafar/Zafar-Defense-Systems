@@ -77,3 +77,14 @@
   (`tests/test_train.py`) — that proves the fine-tuning loop itself
   works, not that the resulting model detects anything real. Blocked on:
   real, license-checked drone imagery being provided.
+- **No real accuracy numbers exist for any backend.** `eval/` (see
+  `docs/DECISIONS.md` entry #10) is a real, tested evaluation harness —
+  AP@0.5, small-object recall, false-alarm rate, latency, track
+  continuity — but no real eval set ships with this repo, only a tiny
+  8-frame synthetic fixture used purely to test the harness's own
+  mechanics (`tests/test_eval_harness.py`). Any metric card or
+  `eval/REPORT.md` you see in this environment was generated from that
+  synthetic fixture, not real drone footage — `eval/output/` is
+  gitignored specifically so a stale/synthetic result can never look like
+  a current, validated one. Blocked on: a real, frozen, license-checked
+  eval set (see `eval/README.md` for the required layout) being provided.

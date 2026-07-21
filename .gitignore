@@ -12,3 +12,4 @@ logs/
 *.egg-info/
 .DS_Store
 *.zip
+eval/output/

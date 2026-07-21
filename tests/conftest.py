@@ -49,3 +49,48 @@ def synthetic_drone_dataset(tmp_path):
 @pytest.fixture(scope="module")
 def synthetic_drone_dataset_module_scoped(tmp_path_factory):
     return build_synthetic_drone_dataset(tmp_path_factory.mktemp("synthetic_dataset"))
+
+
+def build_synthetic_eval_set(eval_set_dir: Path, freeze: bool = True) -> Path:
+    """Write a tiny frozen-eval-set fixture (eval/schema.py's layout) into
+    `eval_set_dir`: one sequence with a moving "drone" square across its
+    first frames, then a couple of hard-negative ("bird") frames. Used to
+    smoke-test eval/harness.py without any real drone footage or a
+    trained model — the zero-dependency `motion` detector is enough to
+    exercise the full harness.
+    """
+    cv2 = pytest.importorskip("cv2")
+    np = pytest.importorskip("numpy")
+
+    images_dir = eval_set_dir / "images"
+    images_dir.mkdir(parents=True)
+
+    frames = []
+    for i in range(8):
+        width, height = 128, 96
+        arr = np.zeros((height, width, 3), dtype=np.uint8)
+        file_name = f"seq_001_{i:03d}.jpg"
+        boxes = []
+        if i < 6:
+            x = 10 + i * 10
+            arr[30:40, x : x + 10] = 255
+            boxes.append({"bbox": [x, 30, 10, 10], "category": "drone"})
+        else:
+            arr[5:15, 80:95] = 180
+            boxes.append({"bbox": [80, 5, 15, 10], "category": "bird"})
+        cv2.imwrite(str(images_dir / file_name), arr)
+        frames.append({"file_name": file_name, "width": width, "height": height, "boxes": boxes})
+
+    (eval_set_dir / "sequences.json").write_text(json.dumps({"sequences": [{"id": "seq_001", "frames": frames}]}))
+
+    if freeze:
+        from eval.schema import freeze_eval_set
+
+        freeze_eval_set(eval_set_dir)
+
+    return eval_set_dir
+
+
+@pytest.fixture
+def synthetic_eval_set(tmp_path):
+    return build_synthetic_eval_set(tmp_path / "synthetic_eval_set")
