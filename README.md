@@ -209,3 +209,4 @@ See `docs/known-limitations.md` for the full list. Headline items:
 - `docs/DECISIONS.md` — key technical/licensing decisions and why.
 - `docs/known-limitations.md` — what this MVP does not do yet.
 - `docs/demo-gap-analysis.md` — the gap analysis this UI/demo pass was scoped from.
+- `docs/licenses.md` — per-dependency license summary; run `python scripts/license_audit.py` to verify no copyleft package is in the default install path.

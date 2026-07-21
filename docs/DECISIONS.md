@@ -188,3 +188,35 @@ demo`, `scripts/summarize_log.py`, and the Streamlit app driven
 end-to-end (initial load, preset switching, a full run, reset, and both
 the "missing optional dependency" and "bad source" error paths) via
 Streamlit's own `AppTest` harness — see `tests/test_ui_app.py`.
+
+## 8. Licensing hygiene audit: keep AGPL out of the default install path
+
+Prompted by an acquisition-due-diligence-style review: confirm nothing
+AGPL/GPL is in the default/shipped path, not just believe it.
+
+**Finding:** the architecture already isolated this correctly before this
+pass — `detector/ultralytics_detector.py` (AGPL-3.0, entry #2) was already
+an optional `pyproject.toml` extra, not a core dependency, and
+`detector/factory.py` already only imports it lazily (inside the
+`if backend == "ultralytics":` branch), so the package is never imported
+unless a caller explicitly selects that backend. No code change was
+needed to fix an isolation gap — there wasn't one.
+
+**What this pass added is the verification tooling that was missing:**
+`scripts/license_audit.py` parses `pyproject.toml`'s core dependencies and
+every optional extra against a small hand-maintained license registry,
+and fails (exit 1) if a copyleft (AGPL/GPL-family) package is found in the
+*core* dependency list; copyleft in an opt-in extra is reported but does
+not fail the audit, since those are never installed or imported by
+default. `docs/licenses.md` is the human-readable counterpart — one table
+for core dependencies (all permissive: MIT/BSD-3-Clause/Apache-2.0), one
+for extras (including the AGPL-3.0 `ultralytics` extra and why it's
+acceptable there specifically).
+
+**Limitation:** the audit's license registry is hand-maintained, not
+pulled from PyPI metadata or an SBOM tool — it only knows about packages
+already listed in it, and reports anything else as `UNKNOWN` rather than
+silently assuming it's safe. Update the registry (and `docs/licenses.md`)
+whenever a dependency is added or changed;
+`tests/test_license_audit.py` covers the parsing/flagging logic itself,
+not whether the registry is currently exhaustive or accurate.
