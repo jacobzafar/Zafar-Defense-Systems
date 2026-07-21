@@ -364,3 +364,39 @@ accuracy — see `eval/README.md`'s "What this harness does NOT do" section
 and `docs/known-limitations.md`. `eval/output/` (the harness's generated
 JSON/report) is gitignored specifically so a stale or synthetic-smoke-test
 result can never be mistaken for a current, validated one.
+
+## 11. Auto-annotation tool and a coverage-tracking template
+
+Adds `tools/preannotate.py` and `docs/coverage-matrix.md`. Neither labels
+any data — both are infrastructure for a human-in-the-loop workflow.
+
+**`tools/preannotate.py`** runs whichever detector backend is selected
+(via the same `config/presets.yaml` + `detector.factory` path everything
+else uses — no separate detector-selection logic was introduced) over a
+video file or a directory of images, and writes its predictions in
+standard COCO instances format (`images`/`annotations`/`categories`),
+with each annotation carrying a `score` field so a reviewer can see the
+detector's confidence. `categories` are built dynamically from whatever
+`class_name` values the chosen backend actually returns (`"drone"`,
+`"moving_object"`, `"bird"`, etc.) rather than hardcoding "drone" — this
+tool is meant to work with any backend, including the placeholder motion
+detector, not just a future drone-specific one. The output JSON's `info`
+field states explicitly that these are unverified predictions, not
+ground truth. Verified end-to-end against a synthetic video (video mode)
+and a directory of extracted frames (image-directory mode), including
+`--frame-stride` and `--max-frames` handling, using the zero-dependency
+`motion` detector — no torch required for this tool's own tests.
+
+**`docs/coverage-matrix.md`** is a template for tracking what real
+footage has actually been collected across drone type (including FPV),
+lighting/weather, background, range, angle, speed, and sensor modality
+(EO/IR). It ships with every checkbox unchecked and an empty scenario
+log — no coverage is claimed. The design favors a single append-only
+"scenario log" table (one row per real, sourced clip) over a giant
+sparse cross-product matrix across all dimensions, which would be
+impractical to fill in and easy to leave stale.
+
+**What remains:** no footage has been run through `tools/preannotate.py`
+in anger yet (only the synthetic smoke test), and the coverage matrix has
+no real entries. Both become useful the moment real footage exists —
+this entry is about the tooling, not about any coverage already achieved.

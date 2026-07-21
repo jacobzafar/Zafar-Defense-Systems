@@ -88,3 +88,9 @@
   gitignored specifically so a stale/synthetic result can never look like
   a current, validated one. Blocked on: a real, frozen, license-checked
   eval set (see `eval/README.md` for the required layout) being provided.
+- **No coverage data exists yet.** `docs/coverage-matrix.md` is an empty
+  template (drone type × lighting/weather × background × range/angle/
+  speed × EO/IR) — every checkbox is unchecked and its scenario log has
+  no rows. `tools/preannotate.py` (auto-annotation for human review) has
+  only been run against a synthetic test video, never real footage.
+  Blocked on: real footage being collected/sourced and run through it.

@@ -179,6 +179,14 @@ your_eval_config.yaml`). No real eval set ships with this repo; see
 harness's own mechanics, via a tiny synthetic fixture — not any real
 accuracy result).
 
+**Auto-annotation for human review (`tools/preannotate.py`):** runs any
+detector backend over a video or image directory and writes its
+predictions as COCO-format pre-labels (with per-box confidence scores)
+for import into CVAT, Label Studio, or similar — for a human to correct,
+not as ground truth. `docs/coverage-matrix.md` is a template for tracking
+what footage conditions (drone type, lighting/weather, background,
+range/angle/speed, EO/IR) have actually been covered; it ships empty.
+
 ## Known limitations
 
 See `docs/known-limitations.md` for the full list. Headline items:
