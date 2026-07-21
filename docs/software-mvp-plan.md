@@ -8,8 +8,9 @@ in this repo.
 ## 1. What exists vs. what's missing
 
 This sandbox has no network access, so the actual GitHub repo
-(jacobzafar/Zafar-Defense-Systems-AB) could not be cloned or inspected.
-See docs/DECISIONS.md entry #1. This MVP is built standalone here and is
+(jacobzafar/Zafar-Defense-Systems, then named Zafar-Defense-Systems-AB)
+could not be cloned or inspected. See docs/DECISIONS.md entry #1. This
+MVP is built standalone here and is
 meant to be copied into the real repo. Nothing is assumed to pre-exist.
 
 ## 2. Target architecture (summary)

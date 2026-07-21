@@ -3,11 +3,12 @@
 ## 1. Repo built standalone, not cloned from GitHub
 
 The sandbox this was built in has no network egress, so
-`github.com/jacobzafar/Zafar-Defense-Systems-AB` could not be reached to
-inspect existing content or push changes. This entire MVP was built fresh
-and is meant to be copied/merged into that repository manually. If the
-real repo already contains files with the same names, review for conflicts
-before merging.
+`github.com/jacobzafar/Zafar-Defense-Systems` (at the time,
+`Zafar-Defense-Systems-AB` — the repo was later renamed) could not be
+reached to inspect existing content or push changes. This entire MVP was
+built fresh and is meant to be copied/merged into that repository
+manually. If the real repo already contains files with the same names,
+review for conflicts before merging.
 
 ## 2. Default detector is a placeholder motion detector, not a trained model
 
@@ -433,3 +434,24 @@ failure modes this app is actually known to have (no live Stop control,
 backend/dependency mismatches, the webcam option being server-side not
 browser-side, Streamlit's upload size limit) written from what this repo
 has actually verified about its own behavior, not generic advice.
+
+## 13. Housekeeping: repo rename cleanup, final install/test verification
+
+The GitHub repository was renamed from `Zafar-Defense-Systems-AB` to
+`Zafar-Defense-Systems` (confirmed via `gh repo view`, not assumed — the
+local git remote still points at the old URL, which continues to work
+because GitHub redirects renamed-repo URLs automatically; this pass did
+not touch git remote configuration, only documentation text). Updated the
+stale `-AB` references in `docs/README.md` (title and clone
+instructions) and left the historical mentions in `docs/DECISIONS.md`
+entry #1 and `docs/software-mvp-plan.md` intact but annotated, since they
+describe what was true at the time rather than the current name.
+
+Final verification for this whole backlog pass, from a completely fresh
+`.venv`: `pip install -r requirements.txt` alone (no torch) installs in
+~35s with no ML framework in the dependency tree; `detector.factory.
+build_detector()`'s default remains `MotionDetector`; the full test suite
+passes both without the optional `torch`/`torchvision` extra (120 passed,
+4 skipped) and with it installed (135 passed); `scripts/license_audit.py`
+still passes; `make demo` still runs cleanly end-to-end; and `python -m
+py_compile` succeeds across all 61 `.py` files in the repo.

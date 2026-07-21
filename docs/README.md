@@ -1,4 +1,4 @@
-# Zafar Defense Systems AB
+# Zafar Defense Systems
 
 Initial R&D repository for AI-based drone detection, target tracking, control logic, and operator interface development.
 
@@ -110,8 +110,8 @@ Examples of likely future iterations:
 Clone the repository:
 
 ```bash
-git clone https://github.com/jacobzafar/Zafar-Defense-Systems-AB.git
-cd Zafar-Defense-Systems-AB
+git clone https://github.com/jacobzafar/Zafar-Defense-Systems.git
+cd Zafar-Defense-Systems
 ```
 
 Create the project structure if needed:
