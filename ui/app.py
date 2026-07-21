@@ -40,7 +40,7 @@ from tracker.factory import build_tracker
 from ui import theme
 from ui.overlay import draw_tracks
 
-DETECTOR_BACKENDS = ["motion", "torchvision", "ultralytics"]
+DETECTOR_BACKENDS = ["motion", "torchvision", "ultralytics", "drone"]
 TRACKER_BACKENDS = ["iou", "bytetrack"]
 
 _ERROR_HINTS = {
@@ -48,6 +48,10 @@ _ERROR_HINTS = {
         "A selected backend needs an optional dependency that isn't installed in this "
         "environment. Install it (see the sidebar note or README.md) or switch back to the "
         "default motion detector / IoU tracker."
+    ),
+    "missing_weights": (
+        "The drone-specific backend has no trained weights at the given path yet. Train one "
+        "with detector/train.py (see docs/DECISIONS.md), or switch to a different backend."
     ),
     "bad_source": (
         "The video source could not be opened or read. Check that the file isn't corrupt, "
@@ -192,7 +196,17 @@ def _render_sidebar(presets: dict, preset_error: str | None) -> dict:
                     "Weights path (.pt)", key="weights_path",
                     help="Path to a trained YOLO weights file on this machine. Required for this backend.",
                 )
-            dep = "torch/torchvision" if st.session_state.detector_backend == "torchvision" else "ultralytics"
+            elif st.session_state.detector_backend == "drone":
+                st.text_input(
+                    "Drone weights path (.pt)", key="weights_path",
+                    help="Path to weights produced by detector/train.py. Required for this backend — "
+                    "there are no trained drone-specific weights shipped with this repo.",
+                )
+            dep = {
+                "torchvision": "torch/torchvision",
+                "ultralytics": "ultralytics",
+                "drone": "torch/torchvision",
+            }[st.session_state.detector_backend]
             st.caption(f"Requires the optional `{dep}` package(s) to be installed.")
 
         st.divider()
@@ -262,7 +276,7 @@ def _build_configs() -> tuple[dict, dict]:
         )
     else:
         detector_config.update(confidence_threshold=st.session_state.confidence_threshold)
-        if st.session_state.detector_backend == "ultralytics":
+        if st.session_state.detector_backend in ("ultralytics", "drone"):
             detector_config["weights_path"] = st.session_state.get("weights_path", "")
 
     tracker_config: dict = {"backend": st.session_state.tracker_backend}
@@ -373,6 +387,13 @@ def _execute_run(source, source_label, detector_config, tracker_config, log_dir,
     except ImportError as exc:
         st.session_state.app_state = "error"
         st.session_state.error_kind = "missing_dependency"
+        st.session_state.error_message = str(exc)
+        logger.close()
+        return
+    except FileNotFoundError as exc:
+        # Covers detector.drone_detector.DroneWeightsNotFoundError.
+        st.session_state.app_state = "error"
+        st.session_state.error_kind = "missing_weights"
         st.session_state.error_message = str(exc)
         logger.close()
         return

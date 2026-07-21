@@ -99,6 +99,19 @@ def test_missing_optional_dependency_is_a_friendly_error_not_a_crash(tmp_path):
     assert at.session_state["error_kind"] == "missing_dependency"
 
 
+def test_drone_backend_with_no_weights_is_a_friendly_error_not_a_crash(tmp_path):
+    at = AppTest.from_file(APP_PATH)
+    at.run(timeout=30)
+    at.session_state["log_dir"] = str(tmp_path)
+
+    at.sidebar.selectbox(key="detector_backend").set_value("drone").run(timeout=30)
+    _start_button(at).click().run(timeout=30)
+
+    assert list(at.exception) == []
+    assert at.session_state["app_state"] == "error"
+    assert at.session_state["error_kind"] == "missing_weights"
+
+
 def test_upload_mode_disables_run_until_a_file_is_provided():
     at = AppTest.from_file(APP_PATH)
     at.run(timeout=30)

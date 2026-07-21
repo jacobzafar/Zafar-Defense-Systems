@@ -63,3 +63,17 @@
 - **No dataset included.** You will need to source or record drone footage
   and, if training a real detector, licensed/labeled data — neither is
   included here.
+- **The `drone` detector backend (`detector/drone_detector.py`) has no
+  trained weights and will refuse to run until you supply some.** This is
+  intentional infrastructure (see `docs/DECISIONS.md` entry #9), not a
+  finished model: `detector/datasets/` has a unified schema and a
+  registry of four named public datasets (Anti-UAV, DUT Anti-UAV,
+  Drone-vs-Bird, VisioDECT), but every entry's `source_url` and
+  `local_path` are unset — no data has been downloaded, and every
+  dataset's `license` field is marked `UNVERIFIED` (not asserted as any
+  specific SPDX license) pending a maintainer confirming current terms
+  from the official source. `detector/train.py` has only ever been run
+  in this repo against a 6-image synthetic smoke-test fixture
+  (`tests/test_train.py`) — that proves the fine-tuning loop itself
+  works, not that the resulting model detects anything real. Blocked on:
+  real, license-checked drone imagery being provided.

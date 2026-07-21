@@ -155,7 +155,19 @@ torchvision project under BSD-3-Clause, and is the recommended "real
 detector" path for demo clips today. See `docs/DECISIONS.md` for the full
 reasoning, including entry #6 on the torchvision backend and its
 limitations (COCO has no "drone" class — it filters to `airplane`,
-`bird`, `kite` as visual proxies).
+`bird`, `kite` as visual proxies). Run `python scripts/license_audit.py`
+any time you change dependencies — see `docs/licenses.md`.
+
+**Drone-specific detector (infrastructure only, no weights included):**
+`detector/drone_detector.py` (`--detector drone`) loads weights fine-tuned
+by `detector/train.py` on a single "drone" class — but no such weights
+exist in this repo yet, and it refuses to run (with a clear error) until
+you supply some. `detector/datasets/` has a unified dataset schema and a
+registry of four named public datasets (Anti-UAV, DUT Anti-UAV,
+Drone-vs-Bird, VisioDECT) with `TODO` placeholders for their source URL,
+license confirmation, and local path — no data has been downloaded. See
+`docs/DECISIONS.md` entry #9 and `docs/known-limitations.md` for the full
+status.
 
 ## Known limitations
 

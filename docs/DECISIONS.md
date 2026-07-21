@@ -220,3 +220,81 @@ silently assuming it's safe. Update the registry (and `docs/licenses.md`)
 whenever a dependency is added or changed;
 `tests/test_license_audit.py` covers the parsing/flagging logic itself,
 not whether the registry is currently exhaustive or accurate.
+
+## 9. Drone-specific detector: infrastructure only, no data or weights included
+
+Adds a real path toward a drone-specific (not COCO-proxy) detector, kept
+strictly to plumbing — no dataset was downloaded, no license was
+asserted without a caveat, and no weights were invented.
+
+**`detector/datasets/`:** `manifest.py` defines one schema
+(`DatasetManifest`) and a registry entry for each of the four named
+public sets (Anti-UAV, DUT Anti-UAV, Drone-vs-Bird, VisioDECT). Every
+entry's `source_url` and `local_path` are `None` with a `TODO` — no URL
+was guessed, consistent with this assistant's standing instruction to
+never generate/guess URLs it isn't confident about. Every entry's
+`license` field is `LicenseStatus.UNVERIFIED` with a `license_notes` field
+describing *typical* terms for that kind of dataset (usually
+research/academic-use, often gated behind a request/registration step) —
+this is deliberately not an asserted SPDX license, because it hasn't been
+confirmed against the current official source. `loader.py` implements one
+small, dependency-free loader for a unified COCO-inspired
+`images/`+`annotations.json` layout that every source dataset is expected
+to be converted into by a human — this repo does not attempt per-dataset
+format parsing for formats that haven't been verified. `download.py` is a
+stub: it describes what a maintainer needs to do (visit the source, review
+current terms, convert to the unified schema, set `local_path`) and raises
+a clear `DatasetNotConfiguredError` rather than fetching anything.
+
+**`detector/train.py`:** YAML-configurable fine-tuning of the same
+SSDLite320 MobileNetV3 backbone `detector/torchvision_detector.py` already
+uses, with its classification head replaced for a single "drone"
+foreground class. Structured hard-negative handling: images whose boxes
+(after filtering to `target_class`) are empty — because they had none, or
+only had a different labeled category like "bird"/"clutter" — are kept as
+zero-object training targets, the standard mechanism for teaching a
+detector to suppress false positives on a known confusable class, rather
+than silently dropping those images or inventing a second output class
+for them. Deterministic seeding (`random`/`numpy`/`torch`) for
+reproducibility. Writes `weights.pt` + a `training_report.json` containing
+only measurements from that actual run (loss curve, dataset counts,
+config, seed, versions) — it deliberately does not compute or claim any
+accuracy metric (mAP, recall, etc.); that is exclusively the frozen
+evaluation harness's job (Priority 4 / `eval/`), so training-time numbers
+can never be mistaken for a validated benchmark result.
+
+**Real bug found and fixed while proving this actually runs:** the first
+version of `train.py` crashed on a batch of size 1
+(`ValueError: Expected more than 1 value per channel when training`) —
+`nn.BatchNorm2d` requires more than one sample per channel in training
+mode, and a dataset size not evenly divisible by the batch size produces
+exactly such a batch. Fixed by freezing BatchNorm layers to eval mode
+during fine-tuning (`_freeze_batchnorm`), which is also standard practice
+for fine-tuning a pretrained detector on a small dataset — recomputing
+batch statistics from a handful of images is unstable regardless of the
+crash. Verified end-to-end in this environment: built a tiny synthetic
+dataset (6 images, half labeled "drone", half labeled "bird" as a hard
+negative), ran `train()` for real, loaded the resulting `weights.pt` via
+the new `detector/drone_detector.DroneDetector`, and confirmed `detect()`
+runs and returns well-formed `Detection` objects. This proves the
+plumbing, not detection accuracy — the model in that smoke test saw six
+tiny synthetic images for one epoch.
+
+**`detector/drone_detector.py`:** new `BaseDetector` backend, registered
+in `detector/factory.py` as `backend: "drone"`, added to
+`config/loader.py`'s `VALID_DETECTOR_BACKENDS`, `scripts/run_pipeline.py`'s
+`--detector` choices, and the UI's detector dropdown — **default backend
+stays `motion`**, this is purely an additional opt-in option. If no
+weights file exists at the configured path, it raises
+`DroneWeightsNotFoundError` (a `FileNotFoundError` subclass) with a
+message naming the exact path and pointing at `detector/train.py`, rather
+than silently falling back to anything. The CLI and UI both catch this
+specifically (`error_kind: "missing_weights"` in the UI) and show that
+message directly instead of a raw traceback.
+
+**What remains, honestly:** no dataset has been downloaded or converted,
+no drone-specific weights exist anywhere in this repo, and nothing has
+been validated against real drone footage. This entry is infrastructure
+that becomes useful the moment a maintainer supplies real, license-checked
+data — it does not itself claim to detect drones any better than the
+existing placeholders.

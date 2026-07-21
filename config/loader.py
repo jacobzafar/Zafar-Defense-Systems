@@ -18,7 +18,7 @@ PRESETS_PATH = Path(__file__).resolve().parent / "presets.yaml"
 
 # Kept in sync with detector.factory / tracker.factory by hand — these are
 # the backend identifiers those factories recognize.
-VALID_DETECTOR_BACKENDS = frozenset({"motion", "ultralytics", "torchvision"})
+VALID_DETECTOR_BACKENDS = frozenset({"motion", "ultralytics", "torchvision", "drone"})
 VALID_TRACKER_BACKENDS = frozenset({"iou", "bytetrack"})
 
 _NUMERIC_DETECTOR_KEYS = ("min_area_px", "max_area_fraction", "var_threshold", "history", "confidence_threshold")

@@ -36,9 +36,9 @@ def parse_args() -> argparse.Namespace:
         help='Video file path, RTSP URL, webcam index (e.g. 0), or "demo" for the built-in synthetic clip',
     )
     parser.add_argument("--preset", default="default", help="Named config preset (see config/presets.yaml)")
-    parser.add_argument("--detector", default=None, choices=["motion", "ultralytics", "torchvision"], help="Override the preset's detector backend")
+    parser.add_argument("--detector", default=None, choices=["motion", "ultralytics", "torchvision", "drone"], help="Override the preset's detector backend")
     parser.add_argument("--tracker", default=None, choices=["iou", "bytetrack"], help="Override the preset's tracker backend")
-    parser.add_argument("--weights", default=None, help="Weights path, required if --detector ultralytics")
+    parser.add_argument("--weights", default=None, help="Weights path, required if --detector ultralytics or drone")
     parser.add_argument("--save-video", default=None, help="Optional path to write an annotated output video")
     parser.add_argument("--log-dir", default=None, help="Directory for JSONL run logs (defaults to the preset's)")
     parser.add_argument("--max-frames", type=int, default=None, help="Stop after N frames (useful for smoke tests)")
@@ -61,10 +61,10 @@ def main() -> int:
     detector_config = dict(preset.detector)
     if args.detector:
         detector_config["backend"] = args.detector
-    if detector_config.get("backend") == "ultralytics":
+    if detector_config.get("backend") in ("ultralytics", "drone"):
         weights_path = args.weights or detector_config.get("weights_path")
         if not weights_path:
-            print("--weights is required when --detector ultralytics", file=sys.stderr)
+            print(f"--weights is required when --detector {detector_config['backend']}", file=sys.stderr)
             return 1
         detector_config["weights_path"] = weights_path
 
@@ -79,6 +79,10 @@ def main() -> int:
         tracker = build_tracker(tracker_config)
     except ImportError as exc:
         print(f"Missing optional dependency for the selected backend: {exc}", file=sys.stderr)
+        return 1
+    except FileNotFoundError as exc:
+        # Covers detector.drone_detector.DroneWeightsNotFoundError.
+        print(str(exc), file=sys.stderr)
         return 1
     except (KeyError, ValueError) as exc:
         print(f"Invalid detector/tracker config: {exc}", file=sys.stderr)

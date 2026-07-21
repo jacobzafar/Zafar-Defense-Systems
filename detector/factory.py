@@ -40,6 +40,14 @@ def build_detector(config: dict[str, Any] | None = None) -> BaseDetector:
             target_classes=config.get("target_classes"),
         )
 
+    if backend == "drone":
+        from detector.drone_detector import DroneDetector
+
+        return DroneDetector(
+            weights_path=config.get("weights_path", ""),
+            confidence_threshold=config.get("confidence_threshold", 0.35),
+        )
+
     raise ValueError(
-        f"Unknown detector backend '{backend}'. Valid options: motion, ultralytics, torchvision."
+        f"Unknown detector backend '{backend}'. Valid options: motion, ultralytics, torchvision, drone."
     )
