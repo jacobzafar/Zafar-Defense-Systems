@@ -6,7 +6,9 @@ logs/
 *.mp4
 *.avi
 *.mov
-.streamlit/
+# .streamlit/config.toml (theme) is committed; only ignore local secrets.
+.streamlit/secrets.toml
 .pytest_cache/
 *.egg-info/
 .DS_Store
+*.zip

@@ -106,3 +106,85 @@ detector (a multi-hundred-MB `torch` install versus none). Fine-tuning on
 real drone imagery, or licensing a drone-specific model, is the next step
 if detection accuracy on the actual demo clips proves insufficient — see
 `docs/known-limitations.md`.
+
+## 7. UI/demo-readiness pass: operator console, demo mode, presets, and two bug fixes
+
+Follow-up to `docs/demo-gap-analysis.md`. Scope: make the app demo-ready
+*before* real drone footage exists, without redesigning the tracker or
+the module boundaries.
+
+**Two pre-existing bugs fixed as part of this pass, not new features:**
+
+1. `control/state.py`'s transition table didn't allow `IDLE -> ERROR`. A
+   video source that failed to open would crash with a confusing
+   `ValueError` about the state machine instead of the intended
+   `RuntimeError` about the bad source — this was flagged but deliberately
+   left alone in the prior detector-integration pass as out of scope; it's
+   in scope now under "robustness/error handling." Fixed by adding
+   `IDLE: {RUNNING, ERROR}` and `STOPPED: {..., ERROR}` to the transition
+   table (`tests/test_state_machine.py` covers this directly).
+2. `ui/app.py` used to re-open a **new** `cv2.VideoCapture` and seek by
+   frame index on every single frame just to fetch the raw frame for
+   display, on top of the capture already opened inside
+   `Pipeline.run()`. Frame-index seeking is unreliable on compressed
+   video in OpenCV, and this doubled I/O per frame. Fixed at the source:
+   `control.events.FrameResult` now carries the raw decoded frame
+   (`FrameResult.frame`, excluded from JSONL serialization), so the UI
+   and the CLI's `--save-video` path both use the frame the pipeline
+   already decoded — no second capture, no seeking, and it works
+   uniformly for files, webcams, and the new synthetic source (none of
+   which support arbitrary re-seeking).
+
+**Demo mode (`control/synthetic_source.py`):** a small `SyntheticVideoSource`
+implementing just the `isOpened`/`read`/`get`/`release` surface
+`Pipeline.run()` needs, so it's a drop-in alternative to
+`cv2.VideoCapture` selected by the source string `"demo"`/`"synthetic"` —
+no special-casing anywhere else in the pipeline, UI, or CLI. It fabricates
+a deterministic (seeded) clip of a few bouncing shapes so the full
+detect/track/log/UI chain can be exercised with zero video files, camera
+access, GPU, or network calls. This is explicitly a plumbing check, not a
+detection-quality check — documented as such in the UI, README, and
+`docs/known-limitations.md` so it can't be mistaken for validation on real
+footage.
+
+**Config presets (`config/presets.yaml` + `config/loader.py`):** adds
+`pyyaml` as a *core* dependency (previously unused — `config/example.yaml`
+described a config shape nothing actually loaded). The loader only builds
+and validates the plain config dicts the existing
+`detector.factory`/`tracker.factory` already accept; it doesn't duplicate
+or bypass them, so backend/key validity stays defined in exactly one
+place. Four presets (`default`/`demo`/`debug`/`fast`) ship as a starting
+point; invalid presets fail with a `ConfigError` naming the problem
+instead of a raw exception from deep in the factories.
+
+**UI: still Streamlit, now with a real dark theme + a custom panel layer.**
+`.streamlit/config.toml` sets Streamlit's own supported dark base theme
+(this is why `.streamlit/` is no longer blanket-`.gitignore`d — only
+`.streamlit/secrets.toml` is now, since that's the file that should never
+be committed); `ui/theme.py` adds badges/KPI cards/panels on top via CSS
+classes this app fully controls, rather than fighting Streamlit's
+internal (and unstable across versions) generated class names. Setting
+`gatherUsageStats = false` in that same file also resolves a decision
+flagged as open in `docs/demo-gap-analysis.md` (whether Streamlit's
+anonymous telemetry ping is acceptable for a demo room) by turning it off
+by default.
+
+**No true live "Stop" control, by design, not by oversight.** The UI
+still runs one blocking loop per invocation (same execution model as
+before). Interrupting that loop mid-run from a button click would need a
+background thread and a polled cancellation flag — a real architectural
+change to the UI's execution model, which was out of scope for this pass
+("do not redesign the UI" beyond the requested panel/theme work). The
+sidebar's "Max frames" limiter is the practical substitute; this is called
+out explicitly in the UI copy, README, and known-limitations so it reads
+as an documented constraint, not a missing feature.
+
+**Verified, not just written:** every piece above was exercised directly
+in this pass — `pytest` (49 passed with the optional `torch` extra
+installed, 1 skipped without it, including new state-machine, synthetic
+source, config loader, telemetry summary, and UI tests), the CLI against
+both a real file and demo mode with `--save-video`/`--preset`, `make
+demo`, `scripts/summarize_log.py`, and the Streamlit app driven
+end-to-end (initial load, preset switching, a full run, reset, and both
+the "missing optional dependency" and "bad source" error paths) via
+Streamlit's own `AppTest` harness — see `tests/test_ui_app.py`.

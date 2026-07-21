@@ -4,9 +4,11 @@
 # many servers/containers/CI images.
 opencv-python-headless>=4.9,<5
 numpy>=1.26,<2
+pyyaml>=6.0,<7
 
 # UI (required to run ui/app.py)
-streamlit>=1.35
+# >=1.45 for the `width=` parameter on st.image/st.button (use_container_width is deprecated)
+streamlit>=1.45
 
 # Testing
 pytest>=8.0

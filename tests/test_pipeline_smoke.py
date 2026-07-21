@@ -39,3 +39,17 @@ def test_pipeline_runs_end_to_end_on_synthetic_video():
         assert len(results) > 0
         assert all(r.inference_ms >= 0 for r in results)
         assert all(r.error is None or isinstance(r.error, str) for r in results)
+        assert all(r.frame is not None for r in results)
+        assert all(r.total_ms >= 0 for r in results)
+
+
+def test_pipeline_runs_end_to_end_on_demo_source():
+    """The built-in synthetic demo source needs no file/GPU/camera at all —
+    this is the "verify before real footage exists" smoke test."""
+    pipeline = Pipeline(detector=MotionDetector(min_area_px=40, var_threshold=16.0), tracker=IoUTracker())
+    results = list(pipeline.run("demo"))
+
+    assert len(results) > 0
+    assert any(r.detection_count > 0 for r in results)
+    assert all(r.frame is not None for r in results)
+    assert all(r.fps >= 0 for r in results)

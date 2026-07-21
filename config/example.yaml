@@ -1,6 +1,9 @@
-# Copy to config/local.yaml and adjust as needed.
-# Not auto-loaded yet (scripts/run_pipeline.py uses CLI flags directly) —
-# this is a reference for the config dicts consumed by the factories.
+# Reference for hand-writing a one-off detector/tracker config dict, in the
+# exact shape detector.factory.build_detector() / tracker.factory.build_tracker()
+# expect. Not auto-loaded by path — for a ready-to-use, validated, named
+# config, use config/presets.yaml via config.loader.load_presets() instead
+# (selectable today via `--preset` in scripts/run_pipeline.py and the
+# Streamlit sidebar).
 
 detector:
   backend: motion         # motion | ultralytics | torchvision

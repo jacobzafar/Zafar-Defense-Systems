@@ -6,8 +6,8 @@ import cv2
 
 from tracker.base import Track
 
-_BOX_COLOR = (0, 200, 0)
-_TEXT_COLOR = (255, 255, 255)
+_BOX_COLOR = (255, 166, 58)  # BGR — matches the operator console's accent color
+_TEXT_COLOR = (14, 17, 21)  # dark text reads cleanly on the accent-colored label background
 
 
 def draw_tracks(frame, tracks: list[Track]):

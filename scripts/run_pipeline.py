@@ -4,6 +4,8 @@
 Usage:
     python scripts/run_pipeline.py --source path/to/video.mp4
     python scripts/run_pipeline.py --source 0                     # webcam
+    python scripts/run_pipeline.py --source demo                  # synthetic demo clip, no file needed
+    python scripts/run_pipeline.py --source video.mp4 --preset fast
     python scripts/run_pipeline.py --source video.mp4 --save-video out.mp4
 """
 
@@ -17,21 +19,28 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import cv2  # noqa: E402
 
+from config.loader import ConfigError, get_preset  # noqa: E402
 from control.pipeline import Pipeline  # noqa: E402
 from detector.factory import build_detector  # noqa: E402
 from telemetry.logger import EventLogger  # noqa: E402
+from telemetry.summary import format_summary, summarize_log  # noqa: E402
 from tracker.factory import build_tracker  # noqa: E402
 from ui.overlay import draw_tracks  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the detection/tracking pipeline headlessly.")
-    parser.add_argument("--source", required=True, help="Video file path, RTSP URL, or webcam index (e.g. 0)")
-    parser.add_argument("--detector", default="motion", choices=["motion", "ultralytics", "torchvision"])
-    parser.add_argument("--tracker", default="iou", choices=["iou", "bytetrack"])
+    parser.add_argument(
+        "--source",
+        required=True,
+        help='Video file path, RTSP URL, webcam index (e.g. 0), or "demo" for the built-in synthetic clip',
+    )
+    parser.add_argument("--preset", default="default", help="Named config preset (see config/presets.yaml)")
+    parser.add_argument("--detector", default=None, choices=["motion", "ultralytics", "torchvision"], help="Override the preset's detector backend")
+    parser.add_argument("--tracker", default=None, choices=["iou", "bytetrack"], help="Override the preset's tracker backend")
     parser.add_argument("--weights", default=None, help="Weights path, required if --detector ultralytics")
     parser.add_argument("--save-video", default=None, help="Optional path to write an annotated output video")
-    parser.add_argument("--log-dir", default="logs", help="Directory for JSONL run logs")
+    parser.add_argument("--log-dir", default=None, help="Directory for JSONL run logs (defaults to the preset's)")
     parser.add_argument("--max-frames", type=int, default=None, help="Stop after N frames (useful for smoke tests)")
     return parser.parse_args()
 
@@ -43,64 +52,84 @@ def main() -> int:
     if isinstance(source, str) and source.isdigit():
         source = int(source)
 
-    detector_config = {"backend": args.detector}
-    if args.detector == "ultralytics":
-        if not args.weights:
+    try:
+        preset = get_preset(args.preset)
+    except ConfigError as exc:
+        print(f"Config error: {exc}", file=sys.stderr)
+        return 1
+
+    detector_config = dict(preset.detector)
+    if args.detector:
+        detector_config["backend"] = args.detector
+    if detector_config.get("backend") == "ultralytics":
+        weights_path = args.weights or detector_config.get("weights_path")
+        if not weights_path:
             print("--weights is required when --detector ultralytics", file=sys.stderr)
             return 1
-        detector_config["weights_path"] = args.weights
+        detector_config["weights_path"] = weights_path
 
-    detector = build_detector(detector_config)
-    tracker = build_tracker({"backend": args.tracker})
-    logger = EventLogger(log_dir=args.log_dir)
+    tracker_config = dict(preset.tracker)
+    if args.tracker:
+        tracker_config["backend"] = args.tracker
 
+    log_dir = args.log_dir or preset.logging.get("log_dir", "logs")
+
+    try:
+        detector = build_detector(detector_config)
+        tracker = build_tracker(tracker_config)
+    except ImportError as exc:
+        print(f"Missing optional dependency for the selected backend: {exc}", file=sys.stderr)
+        return 1
+    except (KeyError, ValueError) as exc:
+        print(f"Invalid detector/tracker config: {exc}", file=sys.stderr)
+        return 1
+
+    logger = EventLogger(log_dir=log_dir)
     pipeline = Pipeline(detector=detector, tracker=tracker, logger=logger)
 
     video_writer = None
-    capture_for_dims = cv2.VideoCapture(source)
-    frame_w = int(capture_for_dims.get(cv2.CAP_PROP_FRAME_WIDTH)) or 1280
-    frame_h = int(capture_for_dims.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 720
-    fps = capture_for_dims.get(cv2.CAP_PROP_FPS) or 25.0
-    capture_for_dims.release()
-
-    if args.save_video:
-        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        video_writer = cv2.VideoWriter(args.save_video, fourcc, fps, (frame_w, frame_h))
-
-    raw_capture = cv2.VideoCapture(source)
-
-    print(f"[run_pipeline] source={args.source} detector={args.detector} tracker={args.tracker}")
+    print(f"[run_pipeline] source={args.source} preset={args.preset} detector={detector_config.get('backend')} tracker={tracker_config.get('backend')}")
     print(f"[run_pipeline] logging to {logger.log_path}")
 
     frame_count = 0
+    failure: str | None = None
     try:
         for result in pipeline.run(source):
             print(
                 f"frame={result.frame_index:05d} "
                 f"detections={result.detection_count} "
                 f"tracks={len(result.tracks)} "
-                f"inference_ms={result.inference_ms} "
+                f"total_ms={result.total_ms} "
+                f"fps={result.fps} "
                 f"dropped={result.dropped}"
                 + (f" error={result.error}" if result.error else "")
             )
 
-            if video_writer is not None:
-                ok, raw_frame = raw_capture.read()
-                if ok:
-                    annotated = draw_tracks(raw_frame, result.tracks)
-                    video_writer.write(annotated)
+            if args.save_video and result.frame is not None:
+                if video_writer is None:
+                    height, width = result.frame.shape[:2]
+                    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+                    video_writer = cv2.VideoWriter(args.save_video, fourcc, 20.0, (width, height))
+                annotated = draw_tracks(result.frame, result.tracks)
+                video_writer.write(annotated)
 
             frame_count += 1
             if args.max_frames and frame_count >= args.max_frames:
                 pipeline.stop()
                 break
+    except RuntimeError as exc:
+        failure = str(exc)
     finally:
-        raw_capture.release()
         if video_writer is not None:
             video_writer.release()
         logger.close()
 
-    print(f"[run_pipeline] done. {frame_count} frames processed. Log: {logger.log_path}")
+    if failure is not None:
+        print(f"[run_pipeline] failed to run pipeline: {failure}", file=sys.stderr)
+        return 1
+
+    print(f"[run_pipeline] done. {frame_count} frames processed.")
+    print(format_summary(summarize_log(logger.log_path)))
     return 0
 
 

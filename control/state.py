@@ -19,9 +19,9 @@ class PipelineState(Enum):
 
 
 _VALID_TRANSITIONS: dict[PipelineState, set[PipelineState]] = {
-    PipelineState.IDLE: {PipelineState.RUNNING},
+    PipelineState.IDLE: {PipelineState.RUNNING, PipelineState.ERROR},
     PipelineState.RUNNING: {PipelineState.STOPPED, PipelineState.ERROR},
-    PipelineState.STOPPED: {PipelineState.RUNNING, PipelineState.IDLE},
+    PipelineState.STOPPED: {PipelineState.RUNNING, PipelineState.IDLE, PipelineState.ERROR},
     PipelineState.ERROR: {PipelineState.IDLE},
 }
 

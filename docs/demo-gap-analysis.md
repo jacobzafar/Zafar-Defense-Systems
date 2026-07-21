@@ -7,6 +7,19 @@ repository as of commit `ee07485` (branch `feature/software-mvp-scaffold`).
 
 No application code was changed to produce this analysis.
 
+> **Status update:** a follow-up UI/demo-readiness pass (see
+> `docs/DECISIONS.md` entry #7) has since addressed several items from
+> this analysis: the `IDLE -> ERROR` state-machine bug (§3.4's "hard
+> failure" concern) is fixed, the UI's per-frame video re-seek (§3.5) is
+> gone (frames now flow through `FrameResult.frame`), a built-in synthetic
+> demo source now exists so the app can be exercised before real footage
+> is available (§3.1/§6 are still open for *real* footage, but the
+> "nothing to test with" gap is closed), config presets now exist and are
+> loaded/validated (§3.3), and the UI status/event log (§3.4) is
+> substantially richer. **§3.1 — no real demo clips — remains the top
+> open item**; the rest of this document is left as-is as the original
+> point-in-time analysis.
+
 ## 1. Current repository state
 
 Verified by actually running the code (not just reading it): `pip install -r
