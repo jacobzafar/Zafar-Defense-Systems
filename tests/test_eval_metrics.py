@@ -98,16 +98,23 @@ def test_false_alarm_rate_only_counts_hard_negative_frames():
     )
 
     result = compute_false_alarm_rate([hard_negative_with_fa, hard_negative_clean, positive_frame])
+    assert result["measurable"] is True
     assert result["num_hard_negative_frames"] == 2
     assert result["num_false_alarms"] == 1
     assert result["rate_per_frame"] == 0.5
 
 
-def test_false_alarm_rate_is_zero_with_no_hard_negatives():
+def test_false_alarm_rate_is_not_measurable_with_no_hard_negatives():
+    """A 0.0 here would silently read as "measured zero false alarms"
+    instead of "never tested" — must be an explicit not-measurable state,
+    not a number. Mirrors DUT Anti-UAV's real detection test split, which
+    has zero hard-negative images (see docs/datasets.md)."""
     positive_frame = FrameEvalData(frame_id="pos1", gt_boxes=[EvalBox(0, 0, 10, 10, "drone")], pred_boxes=[])
     result = compute_false_alarm_rate([positive_frame])
+    assert result["measurable"] is False
     assert result["num_hard_negative_frames"] == 0
-    assert result["rate_per_frame"] == 0.0
+    assert result["rate_per_frame"] is None
+    assert result["note"]
 
 
 def test_latency_stats_computes_mean_and_fps():
@@ -146,6 +153,7 @@ def test_track_continuity_is_one_when_id_never_switches():
     tracks_by_sequence = {"seq1": [same_track, same_track, same_track]}
 
     result = compute_track_continuity([sequence], tracks_by_sequence, iou_threshold=0.3)
+    assert result["measurable"] is True
     assert result["overall_continuity"] == 1.0
     assert result["total_id_switches"] == 0
 
@@ -188,3 +196,22 @@ def test_track_continuity_ignores_gaps_where_gt_is_absent():
     result = compute_track_continuity([sequence], tracks_by_sequence, iou_threshold=0.3)
     assert result["total_id_switches"] == 0
     assert result["overall_continuity"] == 1.0
+
+
+def test_track_continuity_is_not_measurable_with_only_single_frame_sequences():
+    """A 1.0 here would silently read as "measured perfect continuity"
+    instead of "structurally impossible to test" — must be an explicit
+    not-measurable state. Mirrors eval.build_frozen_eval_set's one-frame-
+    per-image "sequences" for a static-image detection dataset like DUT
+    Anti-UAV's (see docs/datasets.md)."""
+    gt_box = EvalBox(x1=10, y1=10, x2=20, y2=20, category="drone")
+    sequences = [
+        EvalSequence(sequence_id=f"img_{i}", frames=[_frame(f"img_{i}", 0, 100, 100, [gt_box])]) for i in range(3)
+    ]
+    tracks_by_sequence = {f"img_{i}": [[_FakeTrack(i, 0.1, 0.1, 0.2, 0.2)]] for i in range(3)}
+
+    result = compute_track_continuity(sequences, tracks_by_sequence, iou_threshold=0.3)
+    assert result["measurable"] is False
+    assert result["overall_continuity"] is None
+    assert result["note"]
+    assert all(seq["continuity"] is None for seq in result["per_sequence"])

@@ -174,13 +174,24 @@ def compute_small_object_recall(
 
 
 def compute_false_alarm_rate(frames: list[FrameEvalData]) -> dict[str, Any]:
+    """`rate_per_frame` (and `measurable`) is `None`/`False`, not `0.0`,
+    when there are zero hard-negative frames in `frames` — an eval set
+    with no hard negatives says nothing about false-alarm behavior, and a
+    `0.0` there would silently read as "measured zero false alarms"
+    rather than "never tested." Callers must check `measurable` before
+    trusting `rate_per_frame`.
+    """
     hard_negative_frames = [f for f in frames if len(f.gt_boxes) == 0]
     num_false_alarms = sum(len(f.pred_boxes) for f in hard_negative_frames)
-    rate = (num_false_alarms / len(hard_negative_frames)) if hard_negative_frames else 0.0
+    measurable = len(hard_negative_frames) > 0
     return {
-        "rate_per_frame": rate,
+        "measurable": measurable,
+        "rate_per_frame": (num_false_alarms / len(hard_negative_frames)) if measurable else None,
         "num_hard_negative_frames": len(hard_negative_frames),
         "num_false_alarms": num_false_alarms,
+        "note": None
+        if measurable
+        else "No hard-negative (zero-GT) frames in this eval set — false-alarm rate is not measurable here.",
     }
 
 
@@ -209,7 +220,18 @@ def compute_track_continuity(
     the same order as `EvalSequence.frames` (normalized [0,1] coordinates,
     matching Track's own convention — converted to pixel space here using
     each frame's width/height before matching against ground truth).
+
+    `measurable` is `False` when every sequence has at most 1 frame — an
+    ID switch is structurally impossible to observe with only one frame
+    per sequence (e.g. an eval set built by wrapping independent static
+    images as trivial one-frame "sequences" — see
+    eval.build_frozen_eval_set). In that case `overall_continuity` and
+    every per-sequence `continuity` are `None`, not `1.0`: a `1.0` there
+    would silently read as "measured perfect continuity" rather than
+    "never actually tested."
     """
+    measurable = any(len(sequence.frames) > 1 for sequence in sequences)
+
     total_switches = 0
     total_gt_present_frames = 0
     per_sequence: list[dict[str, Any]] = []
@@ -257,16 +279,25 @@ def compute_track_continuity(
                 "sequence_id": sequence.sequence_id,
                 "id_switches": switches,
                 "gt_present_frames": gt_present,
-                "continuity": (1.0 - switches / gt_present) if gt_present > 0 else None,
+                "continuity": (1.0 - switches / gt_present) if measurable and gt_present > 0 else None,
             }
         )
 
     overall_continuity = (
-        1.0 - (total_switches / total_gt_present_frames) if total_gt_present_frames > 0 else 0.0
+        1.0 - (total_switches / total_gt_present_frames)
+        if measurable and total_gt_present_frames > 0
+        else None
     )
     return {
+        "measurable": measurable,
         "overall_continuity": overall_continuity,
         "total_id_switches": total_switches,
         "total_gt_present_frames": total_gt_present_frames,
         "per_sequence": per_sequence,
+        "note": None
+        if measurable
+        else (
+            "Every sequence in this eval set has at most 1 frame — an ID switch is "
+            "structurally impossible to observe, so track continuity is not measurable here."
+        ),
     }

@@ -46,8 +46,10 @@
   environment only, not a guarantee for other hardware or resolutions —
   the UI and CLI now surface a live/measured FPS per run so this can be
   checked directly on your own footage instead of taken on faith. No real
-  drone footage has been used to benchmark accuracy anywhere in this
-  repo's history.
+  drone *video* has been used to benchmark accuracy anywhere in this
+  repo's history — the real numbers that do exist (see below) are from
+  DUT Anti-UAV's static-image detection subset, not video/tracking
+  footage.
 - **Verified installable and runnable.** `pip install -r requirements.txt`,
   `pytest tests/ -v` (49 passed with the optional `torch`/`torchvision`
   extra installed, 1 skipped without it), `scripts/run_pipeline.py`
@@ -60,34 +62,41 @@
   than `opencv-python` — the GUI build requires `libGL.so.1`, which is
   absent on many servers/containers, and nothing in this codebase calls
   `cv2.imshow`/highgui.
-- **No dataset included.** You will need to source or record drone footage
-  and, if training a real detector, licensed/labeled data — neither is
-  included here.
-- **The `drone` detector backend (`detector/drone_detector.py`) has no
-  trained weights and will refuse to run until you supply some.** This is
-  intentional infrastructure (see `docs/DECISIONS.md` entry #9), not a
-  finished model: `detector/datasets/` has a unified schema and a
-  registry of four named public datasets (Anti-UAV, DUT Anti-UAV,
-  Drone-vs-Bird, VisioDECT), but every entry's `source_url` and
-  `local_path` are unset — no data has been downloaded, and every
-  dataset's `license` field is marked `UNVERIFIED` (not asserted as any
-  specific SPDX license) pending a maintainer confirming current terms
-  from the official source. `detector/train.py` has only ever been run
-  in this repo against a 6-image synthetic smoke-test fixture
-  (`tests/test_train.py`) — that proves the fine-tuning loop itself
-  works, not that the resulting model detects anything real. Blocked on:
-  real, license-checked drone imagery being provided.
-- **No real accuracy numbers exist for any backend.** `eval/` (see
-  `docs/DECISIONS.md` entry #10) is a real, tested evaluation harness —
-  AP@0.5, small-object recall, false-alarm rate, latency, track
-  continuity — but no real eval set ships with this repo, only a tiny
-  8-frame synthetic fixture used purely to test the harness's own
-  mechanics (`tests/test_eval_harness.py`). Any metric card or
-  `eval/REPORT.md` you see in this environment was generated from that
-  synthetic fixture, not real drone footage — `eval/output/` is
-  gitignored specifically so a stale/synthetic result can never look like
-  a current, validated one. Blocked on: a real, frozen, license-checked
-  eval set (see `eval/README.md` for the required layout) being provided.
+- **One real dataset (DUT Anti-UAV, detection subset) is now in use — one
+  real detector, evaluated on a real eval set, with real, honestly weak
+  numbers.** `data/dut-anti-uav/` (gitignored, not shipped in this repo)
+  holds the downloaded and converted detection subset; `models/dut_v1/`
+  (also gitignored) holds weights fine-tuned by `detector/train.py`
+  against its real train split (2 epochs — short and correctness-focused,
+  not a benchmark attempt); `eval/REPORT.md` is a real metric card from
+  running the frozen evaluation harness against its real, frozen test
+  split. See `docs/datasets.md` for full provenance. This is a first
+  honest result, not a finished model:
+  - **AP@0.5 = 0.1895, small-object recall = 0.2524** — well below the
+    paper's own published baselines for fully-trained detectors on this
+    exact split (0.40-0.68 mAP; see `eval/REPORT.md`'s baseline
+    comparison). Two epochs on CPU is nowhere near convergence.
+  - **False-alarm rate and track continuity are explicitly "not
+    measurable" on this eval set** — DUT's test split has zero
+    hard-negative (no-drone) images, and it's a bag of independent static
+    images with no temporal structure, so an ID switch is structurally
+    impossible to observe. `eval/metrics.py` reports these as an explicit
+    not-measurable state (with a reason), never as a misleading `0.0` or
+    a misleadingly "perfect" `1.0`.
+  - **The dataset's commercial-use license is still `UNVERIFIED`.** The
+    dataset's own GitHub repo carries an Apache-2.0 `LICENSE` file, but
+    that governs the repo's own contents (a README and one image), not
+    confirmed to cover the actual images/annotations, which are hosted
+    externally with no license statement attached to them directly. See
+    `docs/datasets.md` for the full writeup. `detector/train.py
+    --commercial-only` will refuse this dataset until that's resolved.
+  - Only the detection subset is in use — the tracking subset (20 real
+    multi-frame sequences, which *would* make track continuity
+    measurable) has not been downloaded; see `docs/datasets.md`.
+  - The other three registry entries (Anti-UAV, Drone-vs-Bird, VisioDECT)
+    remain pure infrastructure — no data downloaded, `source_url`/
+    `local_path` still unset. Blocked on: real, license-checked data for
+    each being provided, same as DUT Anti-UAV was.
 - **No coverage data exists yet.** `docs/coverage-matrix.md` is an empty
   template (drone type × lighting/weather × background × range/angle/
   speed × EO/IR) — every checkbox is unchecked and its scenario log has
