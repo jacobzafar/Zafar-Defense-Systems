@@ -501,3 +501,72 @@ curve (5.18 → 4.49 across 2 epochs) and a `weights.pt` with zero
 NaN/Inf tensors, verified directly. See `eval/REPORT.md` for what this
 model actually detects — training loss decreasing is not itself an
 accuracy claim.
+
+## 15. First real dataset end-to-end: license provenance, ingestion, fine-tuning, evaluation
+
+Summary of this whole pass (entries #14 above covers one bug found along
+the way in detail). Every prior mention of "drone" detection accuracy in
+this repo was either a COCO-proxy class or a synthetic fixture; this pass
+is the first time a real public dataset went all the way through
+license-provenance tracking, conversion, fine-tuning, and the frozen
+evaluation harness.
+
+**License provenance came first, deliberately.** `DatasetManifest` gained
+`license_id` (verbatim source text, or `"UNVERIFIED"` — never guessed)
+and `commercial_ok` (`True`/`False`/`None`=unknown), plus a
+`detector/train.py --commercial-only` flag that refuses any dataset
+without an explicit `commercial_ok=True`. DUT Anti-UAV's own GitHub repo
+carries a real Apache-2.0 `LICENSE` file (verified byte-for-byte from
+`raw.githubusercontent.com`), but that governs the repo's own contents
+(a README and one image) — the dataset itself is hosted externally with
+no license statement attached directly to it, so `license_id`/
+`commercial_ok` stay `UNVERIFIED`/unknown pending a maintainer confirming
+the dataset's own terms. See `docs/datasets.md`.
+
+**Ingestion (`detector/datasets/dut_anti_uav.py`):** a concrete
+Pascal-VOC-XML → unified-schema converter, unit-tested against a
+synthetic fixture and then actually run against the real, downloaded
+dataset (10,000 images across the official 5200/2600/2200 train/val/test
+split — every count cross-checked against the source paper's own text
+and table, which agree). Two real data-quality findings surfaced and
+handled explicitly rather than silently: 3 genuine background-only images
+in `train`, 1 degenerate (zero-area) box in `val`.
+
+**Splits kept as-is, frozen eval enforced technically
+(`eval/build_frozen_eval_set.py`):** DUT's own test split became the
+frozen eval set (one single-frame "sequence" per image, since the
+detection subset has no temporal structure) — no re-splitting, so this
+run's AP@0.5 is comparable to the paper's own benchmark protocol. The
+`.frozen` guard was proven against this exact real directory, not just a
+schema-level unit test: pointing `detector/train.py` at it raises
+`EvalSetFrozenError` before any data loads.
+
+**Fine-tuning hit a real bug (entry #14): fixed, not worked around.**
+
+**Evaluation surfaced a second real bug, fixed the same way — verify,
+don't assume.** DUT's test split has zero hard-negative images and no
+temporal structure, so false-alarm rate and track continuity are
+structurally unmeasurable on it. `eval/metrics.py` previously returned
+`0.0`/`1.0` for exactly this case — both looked like real, good results.
+Fixed to return an explicit `measurable: False` plus a reason;
+`eval/report.py` renders that as "not measurable," and collapses the
+per-sequence table (which would otherwise print one identical
+"not measurable" row per image — 2200 of them) into a single summary
+line.
+
+**Actual result, honestly weak, as intended for a first pass:**
+AP@0.5 = 0.1895, small-object recall = 0.2524, ~60ms/frame (16.6 FPS) on
+CPU — well below the paper's own published baselines (0.40–0.68 mAP) for
+fully-trained detectors on this identical split, consistent with 2 epochs
+on CPU being nowhere near convergence. See `eval/REPORT.md` for the full
+metric card and cited baseline comparison (Zhao et al., IEEE TITS 2022,
+arXiv:2205.10851, Table II).
+
+**What remains, honestly:** the dataset's commercial-use status is still
+unresolved (blocks `--commercial-only`, not general research use); only
+2 epochs were run (the model is very likely undertrained, not
+representative of this architecture's ceiling on this data); the
+tracking subset (20 real sequences, which would make track continuity
+actually measurable) has not been downloaded; and the other three
+registry entries (Anti-UAV, Drone-vs-Bird, VisioDECT) remain pure
+infrastructure. See `docs/known-limitations.md`.
