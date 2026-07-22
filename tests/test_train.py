@@ -18,7 +18,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 pytest.importorskip("torch")
 pytest.importorskip("torchvision")
 
-from detector.train import TrainConfig, train
+from detector.datasets.manifest import DATASET_REGISTRY, DatasetManifest, LicenseStatus
+from detector.train import CommercialLicenseRequiredError, TrainConfig, train
 
 
 def test_train_config_from_yaml_round_trips(tmp_path):
@@ -68,6 +69,57 @@ def test_train_runs_end_to_end_on_synthetic_dataset(synthetic_drone_dataset, tmp
     assert len(report["epoch_losses"]) == 1
     assert report["final_loss"] is not None
     assert "benchmark" in report["note"].lower()
+
+
+def test_commercial_only_without_dataset_name_raises(synthetic_drone_dataset, tmp_path):
+    config = TrainConfig(
+        dataset_dir=str(synthetic_drone_dataset),
+        output_dir=str(tmp_path / "out"),
+        epochs=1,
+        commercial_only=True,
+    )
+    with pytest.raises(CommercialLicenseRequiredError, match="dataset_name"):
+        train(config)
+
+
+def test_commercial_only_rejects_unconfirmed_dataset(synthetic_drone_dataset, tmp_path):
+    """Every registry entry defaults commercial_ok=None (unknown) — see
+    tests/test_dataset_manifest.py — so --commercial-only must refuse
+    even a real, registered dataset until a maintainer confirms it."""
+    config = TrainConfig(
+        dataset_dir=str(synthetic_drone_dataset),
+        output_dir=str(tmp_path / "out"),
+        epochs=1,
+        dataset_name="dut-anti-uav",
+        commercial_only=True,
+    )
+    with pytest.raises(CommercialLicenseRequiredError, match="commercial_ok"):
+        train(config)
+
+
+def test_commercial_only_allows_a_confirmed_dataset(synthetic_drone_dataset, tmp_path, monkeypatch):
+    fake_manifest = DatasetManifest(
+        name="Fake Cleared Dataset",
+        description="test fixture",
+        classes=["drone"],
+        license=LicenseStatus.PERMISSIVE_CONFIRMED,
+        license_notes="test fixture",
+        source_url="https://example.invalid/fake",
+        license_id="Fake-Permissive-1.0",
+        commercial_ok=True,
+    )
+    monkeypatch.setitem(DATASET_REGISTRY, "fake-cleared-dataset", fake_manifest)
+
+    config = TrainConfig(
+        dataset_dir=str(synthetic_drone_dataset),
+        output_dir=str(tmp_path / "out"),
+        epochs=1,
+        batch_size=2,
+        dataset_name="fake-cleared-dataset",
+        commercial_only=True,
+    )
+    report = train(config)
+    assert report["num_train_images"] > 0
 
 
 def test_train_raises_clearly_on_empty_dataset(tmp_path):

@@ -47,6 +47,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import yaml  # noqa: E402
 
 from detector.datasets.loader import ImageSample, load_manifest_dataset  # noqa: E402
+from detector.datasets.manifest import get_manifest  # noqa: E402
 from eval.schema import assert_not_for_training  # noqa: E402
 
 try:
@@ -67,6 +68,10 @@ except ImportError:
     _TRAIN_DEPS_AVAILABLE = False
 
 
+class CommercialLicenseRequiredError(RuntimeError):
+    """Raised when --commercial-only is set but the dataset isn't cleared."""
+
+
 @dataclass
 class TrainConfig:
     dataset_dir: str
@@ -79,6 +84,8 @@ class TrainConfig:
     learning_rate: float = 0.005
     seed: int = 42
     device: str = "cpu"
+    dataset_name: str | None = None  # key into detector.datasets.manifest.DATASET_REGISTRY, for --commercial-only
+    commercial_only: bool = False
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "TrainConfig":
@@ -88,6 +95,37 @@ class TrainConfig:
         if unknown:
             raise ValueError(f"Unknown key(s) in {path}: {', '.join(sorted(unknown))}")
         return cls(**raw)
+
+
+def _assert_commercial_clearance(config: "TrainConfig") -> None:
+    """Enforce --commercial-only: refuse to train unless the dataset's
+    registry entry has an explicitly confirmed commercial_ok=True.
+
+    This is how a provenance-clean model gets rebuilt later without
+    re-auditing every dataset by hand — see
+    detector/datasets/manifest.py's module docstring for what
+    `commercial_ok` means and why it defaults to unknown (None) rather
+    than a guess.
+    """
+    if not config.commercial_only:
+        return
+
+    if not config.dataset_name:
+        raise CommercialLicenseRequiredError(
+            "--commercial-only requires 'dataset_name' to be set in the training "
+            "config, naming a key in detector.datasets.manifest.DATASET_REGISTRY, "
+            "so its commercial_ok field can be checked."
+        )
+
+    manifest = get_manifest(config.dataset_name)
+    if manifest.commercial_ok is not True:
+        raise CommercialLicenseRequiredError(
+            f"--commercial-only is set, but dataset '{config.dataset_name}' has "
+            f"commercial_ok={manifest.commercial_ok!r} (license_id={manifest.license_id!r}). "
+            f"Only datasets with an explicitly confirmed commercial_ok=True may be "
+            f"used for a --commercial-only training run. See its license_notes in "
+            f"detector/datasets/manifest.py and docs/datasets.md."
+        )
 
 
 def _require_train_deps() -> None:
@@ -191,6 +229,7 @@ def train(config: TrainConfig) -> dict[str, Any]:
     _require_train_deps()
     set_seed(config.seed)
 
+    _assert_commercial_clearance(config)
     assert_not_for_training(config.dataset_dir)
     samples = load_manifest_dataset(config.dataset_dir)
     if not samples:
@@ -268,6 +307,15 @@ def train(config: TrainConfig) -> dict[str, Any]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", required=True, help="Path to a YAML TrainConfig file")
+    parser.add_argument(
+        "--commercial-only",
+        action="store_true",
+        help=(
+            "Refuse to train unless the dataset (config's 'dataset_name', looked up in "
+            "detector.datasets.manifest.DATASET_REGISTRY) has an explicitly confirmed "
+            "commercial_ok=True. Overrides 'commercial_only' in the config file if passed."
+        ),
+    )
     args = parser.parse_args()
 
     try:
@@ -276,9 +324,15 @@ def main() -> int:
         print(f"Config error: {exc}", file=sys.stderr)
         return 1
 
+    if args.commercial_only:
+        config.commercial_only = True
+
     try:
         report = train(config)
     except ImportError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    except CommercialLicenseRequiredError as exc:
         print(str(exc), file=sys.stderr)
         return 1
 

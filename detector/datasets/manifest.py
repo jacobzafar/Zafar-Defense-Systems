@@ -16,6 +16,24 @@ UNVERIFIED` unless a maintainer has confirmed otherwise, and
 terms. Treat `license_notes` as a starting point for your own
 verification, not a legal conclusion — confirm directly from each
 dataset's official source before downloading or using it.
+
+Two additional provenance fields exist for exactly this purpose:
+
+- `license_id`: a **verbatim** string copied from the dataset's own
+  source (a LICENSE file, a license section in the paper/README, or text
+  a maintainer pasted directly from the official source) — or the literal
+  string `"UNVERIFIED"` if no such text has been supplied. Never a
+  guessed/inferred SPDX identifier.
+- `commercial_ok`: `True` only once a maintainer has confirmed, from
+  `license_id`'s own text, that commercial use is permitted; `False` if
+  confirmed *not* permitted (e.g. explicit research/academic-only terms);
+  `None` for "unknown" — the default, and the only honest value before
+  `license_id` has been filled in from a verified source.
+
+`detector/train.py`'s `--commercial-only` flag reads `commercial_ok` (via
+a dataset's registry entry) to refuse training on any dataset that isn't
+explicitly cleared, so a provenance-clean model can be rebuilt later
+without re-auditing every dataset by hand.
 """
 
 from __future__ import annotations
@@ -50,6 +68,8 @@ class DatasetManifest:
     license: LicenseStatus
     license_notes: str
     source_url: str | None  # TODO: fill in from the dataset's current official page — never guessed here
+    license_id: str = "UNVERIFIED"  # verbatim text from the source, or "UNVERIFIED" — never guessed
+    commercial_ok: bool | None = None  # True/False once confirmed from license_id; None = unknown
     local_path: Path | None = None  # TODO: set to the converted dataset's directory before training
     notes: str = ""
 
@@ -60,9 +80,15 @@ class DatasetManifest:
 # --------------------------------------------------------------------------
 # Registry of named public anti-drone / aerial-object datasets.
 #
-# All four entries below are infrastructure placeholders: `source_url` and
-# `local_path` are intentionally left as TODOs. Nothing here was
-# downloaded, scraped, or fetched to produce this file.
+# Three of the four entries below remain infrastructure placeholders:
+# `source_url` and `local_path` are intentionally left as TODOs, and
+# nothing was downloaded, scraped, or fetched to produce them. `dut-anti-uav`
+# is the exception — its `source_url` was verified live against the
+# dataset's official GitHub repo (wangdongdut/DUT-Anti-UAV) and its
+# detection subset has actually been downloaded and converted for this
+# repo's first real fine-tuning/eval pass (see docs/datasets.md). Its
+# `license`/`license_id`/`commercial_ok` remain conservative regardless —
+# see its `license_notes` for exactly what is and isn't confirmed.
 # --------------------------------------------------------------------------
 
 DATASET_REGISTRY: dict[str, DatasetManifest] = {
@@ -88,19 +114,48 @@ DATASET_REGISTRY: dict[str, DatasetManifest] = {
     "dut-anti-uav": DatasetManifest(
         name="DUT Anti-UAV",
         description=(
-            "Dalian University of Technology anti-UAV detection/tracking dataset. "
-            "TODO: confirm current source and access process."
+            "Dalian University of Technology anti-UAV *detection* subset "
+            "(Zhao, Zhang, Li, Wang, 'Vision-based Anti-UAV Detection and "
+            "Tracking', IEEE TITS 2022, arXiv:2205.10851). 10,000 static "
+            "images, official train/val/test split (5200/2600/2200), single "
+            "'UAV' class, Pascal-VOC-style XML annotations (one <annotation> "
+            "file per image, <object><name>UAV</name><bndbox> "
+            "xmin/ymin/xmax/ymax in absolute pixels)."
         ),
         classes=["drone"],
         license=LicenseStatus.UNVERIFIED,
         license_notes=(
-            "Typically distributed for academic/research use, commonly via a "
-            "request to the authors. Confirm current terms from the paper/repo "
-            "before use — do not assume redistribution or commercial-use rights."
+            "The GitHub repo (wangdongdut/DUT-Anti-UAV) contains an Apache-2.0 "
+            "LICENSE file (confirmed verbatim from "
+            "raw.githubusercontent.com/wangdongdut/DUT-Anti-UAV/master/LICENSE "
+            "— standard Apache License 2.0 text), but that repo holds only a "
+            "README and an example image; the actual detection-subset images "
+            "and annotations are hosted externally (Google Drive / Baidu Pan "
+            "links in the README) with no explicit license statement attached "
+            "to them there. Whether the repo's Apache-2.0 grant is intended to "
+            "cover the externally-hosted dataset itself is NOT confirmed — "
+            "this is exactly the ambiguity `license_id`/`commercial_ok` exist "
+            "to avoid guessing about. Pending a maintainer pasting the "
+            "authoritative verbatim text (paper data-availability statement, "
+            "author correspondence, or an explicit statement on the dataset "
+            "download page) before either field is set to anything but "
+            "'unverified'/unknown."
         ),
-        source_url=None,  # TODO: fill in from the current official source
-        local_path=None,  # TODO
-        notes="TODO: confirm whether bounding-box or segmentation annotations are provided.",
+        source_url="https://github.com/wangdongdut/DUT-Anti-UAV",  # verified live 2026-07-22
+        license_id="UNVERIFIED",  # see license_notes — repo LICENSE found, dataset-content license not confirmed
+        commercial_ok=None,
+        local_path=None,  # set per-split by scripts/convert_dut_anti_uav.py once converted; never local by default
+        notes=(
+            "14 detectors benchmarked on this exact test split in the source "
+            "paper (Table II): SSD-VGG16 mAP 0.632 @ 33.2 FPS, Faster-RCNN "
+            "ResNet50/ResNet18/VGG16 mAP 0.653/0.605/0.633, Cascade-RCNN "
+            "ResNet50 (best) mAP 0.683, YOLOX-ResNet18 (fastest) 53.7 FPS. "
+            "Paper does not state the IoU convention behind their single "
+            "'mAP' column explicitly (P-R curves are shown separately for "
+            "IoU=0.5 and IoU=0.75), so treat this as the closest available "
+            "published reference, not a guaranteed apples-to-apples match "
+            "against this repo's AP@0.5 definition."
+        ),
     ),
     "drone-vs-bird": DatasetManifest(
         name="Drone-vs-Bird",

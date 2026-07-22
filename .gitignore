@@ -13,3 +13,7 @@ logs/
 .DS_Store
 *.zip
 eval/output/
+
+# Datasets and trained weights: never committed, regardless of source.
+/data/
+/models/
