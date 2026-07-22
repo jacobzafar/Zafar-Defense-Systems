@@ -144,7 +144,7 @@ DATASET_REGISTRY: dict[str, DatasetManifest] = {
         source_url="https://github.com/wangdongdut/DUT-Anti-UAV",  # verified live 2026-07-22
         license_id="UNVERIFIED",  # see license_notes — repo LICENSE found, dataset-content license not confirmed
         commercial_ok=None,
-        local_path=None,  # set per-split by scripts/convert_dut_anti_uav.py once converted; never local by default
+        local_path=None,  # set per-split by detector/datasets/dut_anti_uav.py once converted; never local by default
         notes=(
             "14 detectors benchmarked on this exact test split in the source "
             "paper (Table II): SSD-VGG16 mAP 0.632 @ 33.2 FPS, Faster-RCNN "

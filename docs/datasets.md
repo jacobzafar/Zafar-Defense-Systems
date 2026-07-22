@@ -33,14 +33,34 @@ infrastructure-only status. What's real, and what isn't, as of this pass:
   once by the paper's own text (Zhao et al., IEEE TITS 2022,
   arXiv:2205.10851, Section III.A and Table I) and once by actually
   downloading all three splits and counting the extracted files directly
-  — both agree exactly. See `docs/known-limitations.md` and the
-  converter's own printed stats for the full breakdown (small-object
-  fraction, one degenerate zero-area box found in `val`).
+  — both agree exactly.
 - Annotation format: Pascal-VOC-style XML, one file per image
   (`<annotation><object><name>UAV</name><bndbox>xmin/ymin/xmax/ymax`,
   absolute pixel coordinates). Single class, literally named `"UAV"` in
   the source data — mapped to this repo's `"drone"` category by the
-  converter (`scripts/convert_dut_anti_uav.py`).
+  converter (`detector/datasets/dut_anti_uav.py`).
+
+**Real conversion output** (`python -m detector.datasets.dut_anti_uav
+--raw-dir data/dut-anti-uav/raw/<split> --output-dir
+data/dut-anti-uav/converted/<split>`, then re-verified by loading the
+converted output back through `detector/datasets/loader.py`):
+
+| Split | Images | Drone instances | Hard-negative images | Small instances (<32×32=1024px²) | Degenerate boxes skipped |
+|---|---|---|---|---|---|
+| train | 5200 | 5243 | 3 | 2723 (51.9%) | 0 |
+| val | 2600 | 2620 | 0 | 1401 (53.5%) | 1 |
+| test | 2200 | 2245 | 0 | 848 (37.8%) | 0 |
+
+Two real data-quality findings, handled explicitly rather than silently:
+- **3 genuine background-only images in `train`** (`00579.xml`, `00639.xml`,
+  `00724.xml` — zero `<object>` tags in the raw XML, not an artifact of
+  conversion). `val`/`test` have none. These are real hard negatives the
+  false-alarm-rate metric can use, just very few of them, and only in the
+  training split.
+- **1 degenerate (zero-area) box in `val`** (`00991.xml`: box
+  `(1056,443)-(1059,443)` — zero height) — skipped by the converter with
+  a counted warning rather than kept as a zero-area training target or
+  silently dropped along with the rest of that image's valid boxes.
 - The repository itself carries an Apache-2.0 `LICENSE` file (fetched
   verbatim from
   `raw.githubusercontent.com/wangdongdut/DUT-Anti-UAV/master/LICENSE` —

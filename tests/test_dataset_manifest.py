@@ -38,7 +38,7 @@ def test_every_entry_has_required_fields(name):
 
 
 # dut-anti-uav is the one entry with a verified source_url and a
-# local_path set per-split by scripts/convert_dut_anti_uav.py — every
+# local_path set per-split by detector/datasets/dut_anti_uav.py — every
 # other entry remains a pure infrastructure placeholder.
 _STILL_PLACEHOLDER_DATASETS = sorted(EXPECTED_DATASETS - {"dut-anti-uav"})
 
