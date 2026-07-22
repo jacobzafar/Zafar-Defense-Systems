@@ -1,0 +1,29 @@
+# detector/train.py config for the first real fine-tuning pass against
+# DUT Anti-UAV's official train split (5200 images, downloaded and
+# converted per docs/datasets.md). Deliberately short (2 epochs) —
+# the goal of this run is to prove the fine-tuning loop end-to-end on
+# real data and get a first honest number, not to win a benchmark; see
+# docs/DECISIONS.md and eval/REPORT.md for the actual evaluated result.
+#
+# val_fraction: 0.0 — DUT ships its own train/val/test split, and the
+# task this config serves keeps that split intact rather than re-slicing
+# the official train set again internally, so results stay comparable to
+# the published baselines in docs/datasets.md. DUT's own val split
+# (data/dut-anti-uav/converted/val/) remains available, unused by this
+# run, for future hyperparameter tuning.
+#
+# learning_rate: 0.001 (not this script's old 0.005 default) — the first
+# attempt at this run, at 0.005, diverged to NaN weights within one epoch
+# on this exact real data. See docs/DECISIONS.md for the diagnosis;
+# grad_clip_max_norm now also defaults to 10.0 in detector/train.py as a
+# durable fix, not just this config's workaround.
+dataset_dir: data/dut-anti-uav/converted/train
+output_dir: models/dut_v1
+target_class: drone
+val_fraction: 0.0
+epochs: 2
+batch_size: 8
+learning_rate: 0.001
+seed: 42
+device: cpu
+dataset_name: dut-anti-uav

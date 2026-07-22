@@ -9,12 +9,9 @@ loadable by `detector/drone_detector.py`.
 This is infrastructure: it does not ship any dataset or pretrained
 drone-specific weights, and running it against real data is the caller's
 responsibility (see detector/datasets/manifest.py + loader.py for the
-expected dataset layout). This script has been exercised end-to-end in
-this repo only against a tiny synthetic fixture
-(tests/test_train.py) to prove the training loop itself runs — that is a
-plumbing check, not a claim about detection accuracy on real drone
-footage. Never treat this script's own loss numbers as a benchmark result;
-see eval/ for the frozen evaluation harness that is.
+expected dataset layout). Its own loss numbers are training diagnostics,
+never a benchmark result — see eval/ for the frozen evaluation harness
+that produces one.
 
 Structured hard-negative handling: any image whose boxes, after filtering
 to `target_class`, are empty (i.e. it had none, or only had boxes labeled
@@ -23,6 +20,18 @@ a zero-object target. This is the standard hard-negative-mining mechanism
 for object detectors: the loss for such an image penalizes any false
 positive the model raises on it, teaching it to suppress detections on
 birds/clutter without needing a second output class for them.
+
+Gradient clipping (`grad_clip_max_norm`, default 10.0) is applied every
+step. This was not a defensive default added speculatively: a first real
+fine-tuning run against DUT Anti-UAV's train split (5200 real images) at
+this script's previous `learning_rate` default (0.005) diverged to NaN
+weights within the first epoch — the freshly-initialized single-class
+head produces large early gradients that a tiny synthetic 6-image smoke
+test never ran long enough to expose. Clipping alone reduced the blow-up
+but the loss still oscillated without clearly converging; lowering the
+default `learning_rate` to 0.001 alongside it produced a stable,
+monotonically-behaved loss curve over a real 300-batch check. See
+docs/DECISIONS.md for the full diagnosis.
 
 Usage:
     python detector/train.py --config path/to/train_config.yaml
@@ -81,7 +90,8 @@ class TrainConfig:
     val_fraction: float = 0.2
     epochs: int = 10
     batch_size: int = 4
-    learning_rate: float = 0.005
+    learning_rate: float = 0.001
+    grad_clip_max_norm: float = 10.0
     seed: int = 42
     device: str = "cpu"
     dataset_name: str | None = None  # key into detector.datasets.manifest.DATASET_REGISTRY, for --commercial-only
@@ -267,6 +277,7 @@ def train(config: TrainConfig) -> dict[str, Any]:
 
             optimizer.zero_grad()
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=config.grad_clip_max_norm)
             optimizer.step()
 
             running_loss += float(loss.item())

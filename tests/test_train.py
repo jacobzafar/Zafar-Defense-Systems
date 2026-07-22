@@ -137,6 +137,45 @@ def test_train_refuses_a_frozen_eval_set_built_from_a_real_dataset(synthetic_dro
         train(config)
 
 
+def test_grad_clipping_prevents_nan_loss_that_an_unclipped_run_hits(synthetic_drone_dataset, tmp_path):
+    """Regression test for a real bug: a first fine-tuning run against
+    DUT Anti-UAV's real train split diverged to NaN weights within one
+    epoch at this script's previous learning_rate default (0.005) — the
+    freshly-initialized single-class head produces large early gradients
+    a tiny synthetic smoke test never ran long enough to expose. This
+    reproduces the same failure mode (a too-high learning rate) on the
+    synthetic fixture instead, and proves grad_clip_max_norm actually
+    prevents it rather than merely existing as an unused config field.
+    See docs/DECISIONS.md for the full diagnosis on real data.
+    """
+    unclipped_config = TrainConfig(
+        dataset_dir=str(synthetic_drone_dataset),
+        output_dir=str(tmp_path / "unclipped"),
+        epochs=10,
+        batch_size=2,
+        val_fraction=0.2,
+        seed=42,
+        learning_rate=0.5,
+        grad_clip_max_norm=1e12,  # effectively disabled
+    )
+    unclipped_report = train(unclipped_config)
+    assert any(loss != loss for loss in unclipped_report["epoch_losses"])  # NaN != NaN
+
+    clipped_config = TrainConfig(
+        dataset_dir=str(synthetic_drone_dataset),
+        output_dir=str(tmp_path / "clipped"),
+        epochs=10,
+        batch_size=2,
+        val_fraction=0.2,
+        seed=42,
+        learning_rate=0.5,
+        grad_clip_max_norm=1.0,
+    )
+    clipped_report = train(clipped_config)
+    assert all(loss == loss for loss in clipped_report["epoch_losses"])  # no NaN
+    assert clipped_report["final_loss"] is not None
+
+
 def test_train_raises_clearly_on_empty_dataset(tmp_path):
     import json
 

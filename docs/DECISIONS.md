@@ -455,3 +455,49 @@ passes both without the optional `torch`/`torchvision` extra (120 passed,
 4 skipped) and with it installed (135 passed); `scripts/license_audit.py`
 still passes; `make demo` still runs cleanly end-to-end; and `python -m
 py_compile` succeeds across all 61 `.py` files in the repo.
+
+## 14. Real bug found fine-tuning on actual DUT Anti-UAV data: NaN weights from an unclipped, too-high learning rate
+
+`detector/train.py` had, until now, only ever been exercised end-to-end
+against a 6-image synthetic fixture (entry #9). The first real
+fine-tuning run against DUT Anti-UAV's actual train split (5200 real
+images, `config/dut_train.yaml`, 2 epochs) exposed a latent bug that
+tiny fixture could never have caught: loss diverged to `NaN` partway
+through the first epoch, and the saved `weights.pt` came back with 234 of
+476 tensors containing `NaN` — a genuinely broken model, not just a bad
+score. This was caught before evaluating anything against it (loading
+`weights.pt` and checking `torch.isnan(...).any()` per-tensor first,
+precisely to avoid running eval against a corrupted model and reporting
+whatever falls out).
+
+**Diagnosis, not a guess:** re-ran the training loop directly (bypassing
+`train()`, printing per-batch loss) against the real data. Loss exploded
+from ~6 to the hundreds within the first ~20 batches — classic gradient
+explosion. The freshly-initialized single-class classification head
+(everything else is COCO-pretrained) produces large early gradients that
+a 1-epoch, 6-image, 3-batch smoke test never runs long enough to expose.
+Confirmed the fix empirically before applying it: gradient clipping
+(`max_norm=10.0`) alone kept the loss finite over 300 real batches but
+still oscillating (4 to 35, not clearly converging); adding it *together
+with* lowering `learning_rate` from this script's old default of 0.005 to
+0.001 produced a stable, non-exploding curve over the same 300 batches.
+
+**Fix, applied as durable code, not a one-off config workaround:**
+`TrainConfig` gained `grad_clip_max_norm: float = 10.0`, applied via
+`torch.nn.utils.clip_grad_norm_()` every step in `train()`'s loop — a
+standard, low-risk stabilization for any future real fine-tuning run, not
+specific to this dataset. `learning_rate`'s default also moved from 0.005
+to 0.001, since 0.005 is now demonstrated to reliably diverge on real
+data and was never validated for anything beyond the tiny synthetic
+smoke test. `tests/test_train.py`'s
+`test_grad_clipping_prevents_nan_loss_that_an_unclipped_run_hits`
+reproduces the same failure mode (too-high learning rate) on the fast
+synthetic fixture and proves clipping actually prevents it — a real
+regression test, not just a config field that exists unused.
+
+**Result:** the re-run (same config, `grad_clip_max_norm=10.0`,
+`learning_rate=0.001`) produced a finite, monotonically-decreasing loss
+curve (5.18 → 4.49 across 2 epochs) and a `weights.pt` with zero
+NaN/Inf tensors, verified directly. See `eval/REPORT.md` for what this
+model actually detects — training loss decreasing is not itself an
+accuracy claim.
