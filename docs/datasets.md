@@ -97,6 +97,23 @@ data/dut-anti-uav/converted/{train,val,test}/annotations.json
 data/frozen_eval/dut-anti-uav-test/                        # frozen copy of the test split, see eval/README.md
 ```
 
+**The frozen eval set** (`data/frozen_eval/dut-anti-uav-test/`) was built
+from `data/dut-anti-uav/converted/test/` via
+`eval.build_frozen_eval_set.build_frozen_eval_set()` — one single-frame
+"sequence" per image (the detection subset has no temporal structure
+between images, so this is the honest representation, not an
+approximation of a real multi-frame sequence; see that module's
+docstring for what this means for the track-continuity metric). Marked
+frozen (`.frozen` marker file); its `sequences.json` sha256 as of this
+build is `d7d58f3a2e22d3aec8814ae47f38ee145a735f53c4e9cab16c8732a1eaa2244c`
+(2200 sequences/images, matching the test split's real count above).
+`detector/train.py`'s `.frozen` guard was confirmed against this exact
+directory, not just a synthetic fixture — pointing `TrainConfig.dataset_dir`
+at it raises `EvalSetFrozenError` before any data loading happens
+(`tests/test_train.py::test_train_refuses_a_frozen_eval_set_built_from_a_real_dataset`
+covers the same code path with a fast synthetic fixture, since the real
+~275MB test split isn't something CI should need on disk).
+
 `local_path` in the registry is intentionally left `None` at the Python
 level — it is a single field, and this dataset has three splits with
 different roles (train / eval-frozen-test), so the actual paths are wired

@@ -20,6 +20,8 @@ pytest.importorskip("torchvision")
 
 from detector.datasets.manifest import DATASET_REGISTRY, DatasetManifest, LicenseStatus
 from detector.train import CommercialLicenseRequiredError, TrainConfig, train
+from eval.build_frozen_eval_set import build_frozen_eval_set
+from eval.schema import EvalSetFrozenError
 
 
 def test_train_config_from_yaml_round_trips(tmp_path):
@@ -120,6 +122,19 @@ def test_commercial_only_allows_a_confirmed_dataset(synthetic_drone_dataset, tmp
     )
     report = train(config)
     assert report["num_train_images"] > 0
+
+
+def test_train_refuses_a_frozen_eval_set_built_from_a_real_dataset(synthetic_drone_dataset, tmp_path):
+    """End-to-end proof (not just eval.schema's own unit test) that
+    detector/train.py cannot be pointed at an eval set that went through
+    the real build_frozen_eval_set() path used to register the DUT
+    Anti-UAV test split — see docs/datasets.md / eval/README.md."""
+    frozen_eval_set_dir = tmp_path / "frozen_eval"
+    build_frozen_eval_set(synthetic_drone_dataset, frozen_eval_set_dir)
+
+    config = TrainConfig(dataset_dir=str(frozen_eval_set_dir), output_dir=str(tmp_path / "out"), epochs=1)
+    with pytest.raises(EvalSetFrozenError, match="reserved for evaluation only"):
+        train(config)
 
 
 def test_train_raises_clearly_on_empty_dataset(tmp_path):
