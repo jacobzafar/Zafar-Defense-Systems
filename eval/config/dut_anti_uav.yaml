@@ -7,6 +7,7 @@ detector:
   backend: drone
   weights_path: models/dut_v1/weights.pt
   confidence_threshold: 0.35
+  nms_thresh: 0.45  # explicit as of docs/DECISIONS.md entry #18 (was silently 0.55, the stock COCO SSDLite default)
 tracker:
   backend: iou
 iou_threshold: 0.5

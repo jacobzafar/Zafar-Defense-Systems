@@ -1,0 +1,17 @@
+# Same frozen eval set/config as eval/config/dut_anti_uav.yaml, pointed at
+# the lr=0.0005 comparison weights (config/dut_train_lr0005.yaml) instead of
+# the original lr=0.001 run (models/dut_v1/), so the two can be compared
+# directly under identical eval conditions. See docs/DECISIONS.md entry #18.
+eval_set_dir: data/frozen_eval/dut-anti-uav-test
+detector:
+  backend: drone
+  weights_path: models/dut_v1_lr0005/weights.pt
+  confidence_threshold: 0.35
+  nms_thresh: 0.45
+tracker:
+  backend: iou
+iou_threshold: 0.5
+small_object_area_px: 1024.0
+expected_checksum: d7d58f3a2e22d3aec8814ae47f38ee145a735f53c4e9cab16c8732a1eaa2244c
+output_json_path: eval/output/dut_anti_uav_lr0005_metric_card.json
+output_report_path: eval/output/dut_anti_uav_lr0005_REPORT.md

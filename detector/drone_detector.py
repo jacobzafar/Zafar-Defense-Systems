@@ -47,6 +47,7 @@ class DroneDetector(BaseDetector):
         self,
         weights_path: str,
         confidence_threshold: float = 0.35,
+        nms_thresh: float = 0.45,
     ) -> None:
         if not _TORCH_AVAILABLE:
             raise ImportError(
@@ -77,6 +78,23 @@ class DroneDetector(BaseDetector):
         state_dict = torch.load(weights_file, map_location="cpu")
         self._model.load_state_dict(state_dict)
         self._model.eval()
+
+        # build_single_class_model() only replaces the classification head,
+        # so torchvision's ssdlite320_mobilenet_v3_large() factory otherwise
+        # leaves its own NMS config in place: score_thresh=0.001,
+        # nms_thresh=0.55, topk_candidates=300, detections_per_img=300 (all
+        # tuned for 80-class COCO detection). NMS itself runs unconditionally
+        # inside the model's own eval-mode forward pass (see
+        # torchvision.models.detection.ssd.SSD.postprocess_detections) — it
+        # is not missing. But 0.55 is loose for a single dominant-class
+        # problem with a dense overlapping anchor grid: measured directly
+        # against this model's own real output, the surviving boxes'
+        # pairwise IoU clusters at 0.546-0.550, i.e. mechanically just under
+        # that cutoff — the "many near-identical boxes" symptom this
+        # threshold produces. 0.45 is the plain SSD base class's own
+        # (tighter) default in this exact torchvision version, not a value
+        # picked to fit this eval set.
+        self._model.nms_thresh = nms_thresh
 
         self._preprocess = SSDLite320_MobileNet_V3_Large_Weights.DEFAULT.transforms()
 
