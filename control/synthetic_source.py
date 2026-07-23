@@ -22,7 +22,15 @@ import numpy as np
 
 DEMO_SOURCE_KEYS = frozenset({"demo", "synthetic"})
 
-_BACKGROUND = (18, 22, 26)  # BGR, matches the dark operator UI theme
+# BGR. Must read as clearly brighter than the operator console's own dark
+# chrome (.streamlit/config.toml: backgroundColor #0b0f14, brightness ~14;
+# secondaryBackgroundColor #121821, brightness ~23) or the demo frame is
+# visually indistinguishable from empty page background — a previous value
+# here (18, 22, 26), picked to "match the theme," had brightness ~23 and
+# rendered as an apparent black screen with only the detection boxes
+# visible (see docs/DECISIONS.md). A mid-tone slate gray keeps this a
+# plain, neutral backdrop while still unmistakably reading as video content.
+_BACKGROUND = (80, 78, 74)
 _TARGET_COLOR = (225, 225, 225)
 
 

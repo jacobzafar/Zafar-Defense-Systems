@@ -570,3 +570,57 @@ tracking subset (20 real sequences, which would make track continuity
 actually measurable) has not been downloaded; and the other three
 registry entries (Anti-UAV, Drone-vs-Bird, VisioDECT) remain pure
 infrastructure. See `docs/known-limitations.md`.
+
+## 16. Real bug found in the UI's video pane: demo frames rendered as an apparent black screen
+
+The operator console's video pane appeared to show a black screen with
+only the detection-box overlay visible, no video underneath — reported
+as top priority, since a demo that visibly shows no video undermines the
+whole console. Diagnosed with real repro scripts before changing
+anything, not by guesswork:
+
+- Traced the full frame path end to end (`Pipeline.run()` ->
+  `detector.detect()` -> `draw_tracks()` -> `cv2.cvtColor(..., BGR2RGB)`
+  -> `st.image(..., channels="RGB")`) for all four detector backends
+  (`motion`, `torchvision`, `drone`, and the synthetic demo path),
+  checking array identity/dtype/mean brightness at each step. No
+  in-place mutation of the frame by any detector, no BGR/RGB channel
+  swap, no dtype issue — every array was a correctly-shaped, correctly-
+  converted `uint8` frame at every stage.
+- Also re-verified entry #7's earlier per-frame re-seek fix is still in
+  place and not implicated: `ui/app.py` never opens or seeks a
+  `cv2.VideoCapture` itself; it only reads `FrameResult.frame`, and
+  `Pipeline._open_source` opens exactly one capture per run.
+- Built a real test video from actual DUT Anti-UAV images
+  (`cv2.VideoWriter`, since no video file previously existed in this
+  repo to test the UI's non-demo path against) and ran it through the
+  same path: real footage rendered at its true brightness (frame means
+  ~110-170/255 across sampled frames) — the array-level pipeline was
+  never the problem.
+- The actual root cause was in `control/synthetic_source.py`'s demo
+  background color: `_BACKGROUND = (18, 22, 26)` (BGR), chosen (per its
+  own prior comment) to "match the dark operator UI theme." Measured
+  perceptual brightness (`0.299R + 0.587G + 0.114B`): background ~22.7,
+  versus the console's own configured theme in `.streamlit/config.toml`
+  — `backgroundColor #0b0f14` (~14.4) and `secondaryBackgroundColor
+  #121821` (~23.2). The demo frame's brightness sat inside the app
+  chrome's own brightness range, so it was visually indistinguishable
+  from empty page background — confirmed by rendering an actual frame to
+  PNG and inspecting it directly, not just by comparing numbers. This
+  was a real content/contrast defect, not a data-plumbing bug: "Demo
+  mode (synthetic)" is the UI's default, zero-config source, so it's the
+  first thing anyone sees.
+- **Fix:** changed `_BACKGROUND` to `(80, 78, 74)` (BGR, perceptual
+  brightness ~77) — a neutral mid-tone slate gray, clearly distinguishable
+  from the theme chrome while still a plain, deliberately-unrealistic
+  backdrop (per `docs/known-limitations.md`, this source is a plumbing
+  check, not a detection-quality one).
+- **Regression coverage, at two levels:** `tests/test_synthetic_source.py`
+  asserts the demo background's brightness directly against the theme
+  colors read from `.streamlit/config.toml` (so a future color change
+  that reintroduces near-invisible content fails immediately, without
+  a hardcoded magic threshold divorced from the actual theme);
+  `tests/test_pipeline_smoke.py` adds an end-to-end version of the same
+  check that runs the exact render sequence `ui/app.py` uses. Both tests
+  fail against the old color and pass against the fix (checked directly,
+  not assumed). Full suite: 170 passed, 0 failed.
