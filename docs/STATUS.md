@@ -119,8 +119,14 @@ while producing this result, not worked around or assumed away:
   evaluated anywhere in this repo.
 - **FPV-class / very-small / high-speed targets: not specifically
   evaluated.** The eval set's small-object recall (0.2300) is the
-  closest existing signal, and it's weak — but no FPV-specific dataset
-  or scenario has been tested.
+  closest existing signal, and it's weak. VisioDECT (see `docs/
+  datasets.md`) has been ingested and does include a `DJIFPV` model
+  category, but it has not been trained or evaluated on yet, and its own
+  box-size distribution skews *larger*, not smaller, than DUT
+  Anti-UAV's — measured directly, only ~15% of its instances fall under
+  the same 1024px² "small" threshold, vs. 37.8-53.5% for DUT Anti-UAV.
+  Treat "FPV data exists in this repo" and "small/FPV-class coverage is
+  solved" as two separate claims — only the first is currently true.
 - **Real-world (non-benchmark) footage: never evaluated.** Every real
   number above comes from a static-image research benchmark, not live
   camera footage, a real deployment environment, or footage resembling
@@ -142,9 +148,9 @@ Full detail: **`docs/datasets.md`**. Summary:
 | Dataset | Status | License (`license_id`) | `commercial_ok` |
 |---|---|---|---|
 | DUT Anti-UAV (detection subset) | **Downloaded, converted, in active use** | `UNVERIFIED` | `unknown` |
+| VisioDECT | **Ingested (8174 images, 3 of 6 documented UAV models), not yet trained on** — see `docs/datasets.md` | `UNVERIFIED` — no license file found anywhere in the supplied archive | `unknown` |
 | Anti-UAV | Registry placeholder only, no data | `UNVERIFIED` | `unknown` |
 | Drone-vs-Bird | Registry placeholder only, no data | `UNVERIFIED` | `unknown` |
-| VisioDECT | Registry placeholder only, no data | `UNVERIFIED` | `unknown` |
 
 **Flag for commercial use / acquisition due diligence:** DUT Anti-UAV's
 own GitHub repository (`wangdongdut/DUT-Anti-UAV`) carries a real,
