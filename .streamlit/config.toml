@@ -1,0 +1,16 @@
+# Base dark theme + local defaults for the operator console (ui/app.py).
+# ui/theme.py layers panel/badge/KPI CSS on top of this base theme.
+
+[theme]
+base = "dark"
+primaryColor = "#3aa6ff"
+backgroundColor = "#0b0f14"
+secondaryBackgroundColor = "#121821"
+textColor = "#e6edf3"
+font = "sans serif"
+
+[browser]
+gatherUsageStats = false
+
+[server]
+headless = true

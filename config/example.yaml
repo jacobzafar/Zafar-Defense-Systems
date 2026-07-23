@@ -1,0 +1,26 @@
+# Reference for hand-writing a one-off detector/tracker config dict, in the
+# exact shape detector.factory.build_detector() / tracker.factory.build_tracker()
+# expect. Not auto-loaded by path — for a ready-to-use, validated, named
+# config, use config/presets.yaml via config.loader.load_presets() instead
+# (selectable today via `--preset` in scripts/run_pipeline.py and the
+# Streamlit sidebar).
+
+detector:
+  backend: motion         # motion | ultralytics | torchvision
+  min_area_px: 150
+  max_area_fraction: 0.25
+  var_threshold: 32.0
+  history: 300
+  # weights_path: "/path/to/weights.pt"   # required if backend: ultralytics
+  # confidence_threshold: 0.35           # used by ultralytics and torchvision
+  # target_classes: ["drone"]            # ultralytics: your own trained classes
+  # target_classes: ["airplane", "bird", "kite"]  # torchvision: COCO proxy classes (default)
+
+tracker:
+  backend: iou            # iou | bytetrack
+  iou_threshold: 0.3
+  max_age: 15
+  min_hits_to_confirm: 1
+
+logging:
+  log_dir: logs

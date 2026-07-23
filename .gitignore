@@ -1,0 +1,22 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+logs/
+*.mp4
+*.avi
+*.mov
+# .streamlit/config.toml (theme) is committed; only ignore local secrets.
+.streamlit/secrets.toml
+.pytest_cache/
+*.egg-info/
+.DS_Store
+*.zip
+eval/output/
+
+# Datasets and trained weights: never committed, regardless of source.
+/data/
+/models/
+
+# tools/render_detections.py output: regenerable visual QA artifacts.
+/renders/

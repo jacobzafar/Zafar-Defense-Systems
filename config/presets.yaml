@@ -1,0 +1,87 @@
+# Named presets for detector/tracker/logging config, loaded by
+# config/loader.py and selectable from the CLI (--preset) and the
+# Streamlit UI (sidebar preset selector).
+#
+# Each preset produces the same config dict shape that
+# detector.factory.build_detector() / tracker.factory.build_tracker()
+# already expect — this file does not change what backends exist or what
+# keys they accept, it only stores named, validated combinations of them.
+#
+# config/example.yaml remains the single-run reference/template for
+# hand-written configs; this file is specifically the preset catalog.
+
+presets:
+  default:
+    # Matches the factories' own built-in defaults. Safe general baseline.
+    detector:
+      backend: motion
+      min_area_px: 150
+      max_area_fraction: 0.25
+      var_threshold: 32.0
+      history: 300
+    tracker:
+      backend: iou
+      iou_threshold: 0.3
+      max_age: 15
+      min_hits_to_confirm: 1
+    logging:
+      log_dir: logs
+    debug: false
+
+  demo:
+    # Tuned for the built-in synthetic demo source (control/synthetic_source.py):
+    # small, fast-moving targets on a plain background. More sensitive and
+    # slightly more patient about confirming a track than "default", so a
+    # demo run looks visually clean without real footage.
+    detector:
+      backend: motion
+      min_area_px: 40
+      max_area_fraction: 0.25
+      var_threshold: 16.0
+      history: 120
+    tracker:
+      backend: iou
+      iou_threshold: 0.2
+      max_age: 10
+      min_hits_to_confirm: 2
+    logging:
+      log_dir: logs/demo
+    debug: false
+
+  debug:
+    # Same numeric baseline as "default", with the debug flag on — the UI
+    # surfaces the per-frame timing panel and raw last-event JSON when this
+    # is set.
+    detector:
+      backend: motion
+      min_area_px: 150
+      max_area_fraction: 0.25
+      var_threshold: 32.0
+      history: 300
+    tracker:
+      backend: iou
+      iou_threshold: 0.3
+      max_age: 15
+      min_hits_to_confirm: 1
+    logging:
+      log_dir: logs/debug
+    debug: true
+
+  fast:
+    # Optimized for throughput over sensitivity: fewer/larger contours to
+    # process, tracks confirmed and recycled faster. Stays on the
+    # zero-dependency motion backend regardless of what else is installed.
+    detector:
+      backend: motion
+      min_area_px: 200
+      max_area_fraction: 0.25
+      var_threshold: 40.0
+      history: 150
+    tracker:
+      backend: iou
+      iou_threshold: 0.3
+      max_age: 8
+      min_hits_to_confirm: 2
+    logging:
+      log_dir: logs
+    debug: false

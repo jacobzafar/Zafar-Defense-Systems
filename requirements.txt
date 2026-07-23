@@ -1,0 +1,27 @@
+# Core pipeline (required)
+# headless build: this codebase never calls cv2.imshow/highgui, and the
+# non-headless opencv-python wheel requires libGL.so.1, which is absent on
+# many servers/containers/CI images.
+opencv-python-headless>=4.9,<5
+numpy>=1.26,<2
+pyyaml>=6.0,<7
+
+# UI (required to run ui/app.py)
+# >=1.45 for the `width=` parameter on st.image/st.button (use_container_width is deprecated)
+streamlit>=1.45
+
+# Testing
+pytest>=8.0
+
+# --- Optional, install only if you enable the corresponding backend ---
+# Ultralytics YOLO detector backend (AGPL-3.0 / requires commercial license
+# for closed-source production use — see docs/DECISIONS.md entry #2):
+#   pip install ultralytics>=8.2
+
+# Torchvision pretrained detector backend (BSD-3-Clause, no separate
+# licensing decision needed — see docs/DECISIONS.md entry #6). This is the
+# recommended "real detector" path for demo clips:
+#   pip install torch>=2.2 torchvision>=0.17
+
+# Roboflow ByteTrack tracker backend (Apache-2.0):
+#   pip install trackers>=0.1 supervision>=0.24
