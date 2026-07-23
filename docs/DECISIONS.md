@@ -624,3 +624,92 @@ anything, not by guesswork:
   check that runs the exact render sequence `ui/app.py` uses. Both tests
   fail against the old color and pass against the fix (checked directly,
   not assumed). Full suite: 170 passed, 0 failed.
+
+## 17. Operator console redesign: presentable for grant reviewers, still zero fabricated data
+
+Follow-up to entry #16, once the video pane actually rendered. Scope was
+explicitly visual/informational-hierarchy only — no new metrics invented,
+no effector UI, same underlying pipeline data throughout.
+
+**Visual hierarchy, four tiers instead of one flat KPI wall.** The old
+single 9-card `kpi-row` mixed live instantaneous state (fps, active
+tracks), cumulative run totals (frames, detections), and static config
+(detector/tracker name) at identical visual weight. Replaced with:
+header badges (config context: preset/detector/tracker/run name — state
+removed from here, no longer duplicated) → a new primary "status strip"
+(`theme.stat_tile`/`stat_row`) with exactly the four live readouts asked
+for — State, Throughput, Latency, Active tracks — in large tabular-numeral
+type → a smaller secondary row for cumulative run totals (frames,
+detections, unique tracks, dropped, source) → the live-feed/status panels
+→ the event log. Always rendered (even idle/ready, as an explicit "—"),
+so the layout doesn't jump when a run starts.
+
+**Latency was real but hidden.** `FrameResult.total_ms` was already
+computed every frame by `control/pipeline.py` and only ever shown inside
+the opt-in debug panel. It's now one of the four primary tiles,
+always visible — `_execute_run` tracks `last_latency_ms` the same way it
+already tracked `last_fps`, carried into `last_kpi` for the
+completed/error views. No new computation, just surfaced.
+
+**"Active tracks" now means one thing in every state.** The previous
+single KPI card was live "tracks this instant" while running but silently
+became "unique tracks all-run" once completed (same label, different
+meaning). Split into two honest, separately-labeled numbers: "Active
+tracks" is 0 whenever nothing is running (true — a finished run has
+nothing currently active) and "Unique tracks" (secondary row) is the
+cumulative distinct-ID count `RunSummary` already tracked.
+
+**One accent color, actually restrained to detections/alerts — audited by
+screenshot, not just by writing a CSS comment.** `ui/theme.py` gained a
+`--zds-accent` custom property (`#ff9142`); `ui/overlay.py`'s detection
+box color now derives from the same value. First pass also put a
+decorative accent border on all four primary stat tiles regardless of
+content — caught by actually looking at a rendered screenshot (see
+below), not by re-reading the CSS, since a color rule is easy to eyeball
+as "fine" and hard to notice is semantically wrong. Fixed: tiles get a
+neutral border; only "Active tracks" borrows the accent, and only when
+`active_tracks > 0` (it's the one primary-strip number that *is* a live
+detection count). Green/red stay reserved for unambiguous success/failure
+(`ACQUIRED`/`COMPLETED` vs. `DROPPED`/`ERROR`), matching the existing
+state-badge palette rather than introducing a second meaning for either.
+
+**Event log: real events kept, routine noise de-emphasized, nothing
+deleted.** `ACQUIRED`/`LOST`/`DROPPED` got dedicated badge kinds (green /
+accent / red) instead of borrowing unrelated state-badge kinds (`LOST`
+previously reused the `running` amber, `ACQUIRED` the `completed` green
+by coincidence of color, not by a named relationship). The per-frame
+`FRAME` line — real telemetry, but the same numbers already visible in
+the status strip — gets a muted/smaller style (`.event-line-frame`) so it
+recedes visually instead of being deleted; a one-line legend was added
+above the log explaining what each kind means, for an audience seeing
+this console for the first time.
+
+**Verified by actually running it, not just reading the diff.** Installed
+Playwright + Chromium into the local venv (dev-only, `.venv` is
+gitignored, not a project dependency), launched the real Streamlit server,
+and drove it end to end: idle → set max-frames → start a demo run →
+completed, plus the `missing_dependency` error path. This is what caught
+two real bugs neither code review nor the test suite would have:
+
+1. **The header/title was clipped by Streamlit's own fixed toolbar.**
+   Measured precisely rather than eyeballed: `header[data-testid=
+   "stHeader"]` bottom edge at y=60px, `.zds-title` top at y=44px — a
+   16px overlap, painting over the top of the title and header badges.
+   Pre-existing (the padding value was untouched from the original UI
+   pass), just never visually verified before. Fixed by increasing
+   `.block-container`'s `padding-top` from `1.75rem` to `4.5rem`
+   (confirmed by re-measuring: 28px clear gap after the fix).
+2. **Detection labels near the right frame edge were clipped.**
+   `ui/overlay.py`'s label was always anchored at the box's `x1` with no
+   bounds check, so a track near the right edge had its confidence value
+   drawn past the frame boundary and silently cut off by OpenCV's
+   clipping. Fixed by clamping the label's x-position to stay on-canvas
+   (`tests/test_overlay.py`, new file, covers this directly — verified to
+   fail against the old unclamped math before confirming the fix).
+
+**What was deliberately not touched:** no fake gauges, coordinates, or
+capabilities added — every number on screen still traces to a real field
+on `FrameResult`/`RunSummary`/session state. No weapon/effector UI of any
+kind, consistent with every prior entry in this log. Full suite: 173
+passed, 0 failed (170 from entry #16 + 3 new `tests/test_overlay.py`
+cases).

@@ -320,20 +320,11 @@ def _materialize_source(sidebar: dict) -> tuple[str | int | None, str | None]:
 # Header / KPIs
 # --------------------------------------------------------------------------
 
-def _state_badge_kind(state: str) -> str:
-    return {
-        "idle": "idle",
-        "ready": "ready",
-        "running": "running",
-        "completed": "completed",
-        "error": "error",
-    }.get(state, "neutral")
-
-
 def _render_header() -> None:
-    state = st.session_state.app_state
+    # State itself is the operator-facing status strip's job (rendered big,
+    # just below this header) — these badges are configuration context, not
+    # live status, so they don't repeat it.
     badges = [
-        theme.badge(state.upper(), _state_badge_kind(state)),
         theme.badge(f"PRESET · {st.session_state.get('preset_name', 'default')}", "neutral"),
         theme.badge(f"DET · {st.session_state.detector_backend}", "neutral"),
         theme.badge(f"TRK · {st.session_state.tracker_backend}", "neutral"),
@@ -352,16 +343,32 @@ def _render_header() -> None:
     )
 
 
-def _kpi_html(frame_count, detections_total, active_tracks, dropped_total, fps, detector_name, tracker_name, source_label) -> str:
+def _status_strip_html(fps: float, latency_ms: float, active_tracks: int) -> str:
+    """The four live-operational readouts an operator reads at a glance:
+    state, throughput, per-frame latency, and how many targets are
+    currently tracked. Always rendered, in every app state — latency and
+    FPS fall back to an explicit "—" rather than a stale or fabricated
+    number when no run has produced one yet.
+    """
+    state = st.session_state.app_state
+    tiles = [
+        theme.stat_tile("State", state.capitalize(), kind=state),
+        theme.stat_tile("Throughput", f"{fps:.1f}" if fps else "—", unit="fps" if fps else None),
+        theme.stat_tile("Latency", f"{latency_ms:.1f}" if latency_ms else "—", unit="ms" if latency_ms else None),
+        theme.stat_tile("Active tracks", str(active_tracks), kind="tracks-active" if active_tracks else ""),
+    ]
+    return theme.stat_row(tiles)
+
+
+def _secondary_kpi_html(frame_count, detections_total, unique_tracks, dropped_total, source_label) -> str:
+    """Cumulative run totals — real counts, but secondary to the live
+    status strip above, so they're styled smaller/quieter rather than
+    competing with it for attention."""
     cards = [
-        theme.kpi_card("State", st.session_state.app_state.capitalize()),
         theme.kpi_card("Frames processed", str(frame_count)),
-        theme.kpi_card("Detections", str(detections_total)),
-        theme.kpi_card("Active tracks", str(active_tracks)),
+        theme.kpi_card("Detections (total)", str(detections_total)),
+        theme.kpi_card("Unique tracks", str(unique_tracks)),
         theme.kpi_card("Dropped frames", str(dropped_total)),
-        theme.kpi_card("Throughput", f"{fps:.1f} fps" if fps else "—"),
-        theme.kpi_card("Detector", detector_name),
-        theme.kpi_card("Tracker", tracker_name),
         theme.kpi_card("Source", source_label or "—"),
     ]
     return theme.kpi_row(cards)
@@ -419,6 +426,7 @@ def _execute_run(source, source_label, detector_config, tracker_config, log_dir,
     track_ids: set[int] = set()
     active_track_ids: set[int] = set()
     last_fps = 0.0
+    last_latency_ms = 0.0
 
     try:
         for result in pipeline.run(source):
@@ -428,6 +436,7 @@ def _execute_run(source, source_label, detector_config, tracker_config, log_dir,
             for t in result.tracks:
                 track_ids.add(t.track_id)
             last_fps = result.fps or last_fps
+            last_latency_ms = result.total_ms or last_latency_ms
 
             if result.frame is not None:
                 annotated = draw_tracks(result.frame, result.tracks)
@@ -435,7 +444,8 @@ def _execute_run(source, source_label, detector_config, tracker_config, log_dir,
                 frame_ph.image(cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB), channels="RGB", width="stretch")
 
             kpi_ph.markdown(
-                _kpi_html(frame_count, detections_total, len(result.tracks), dropped_total, last_fps, detector.name, tracker.name, source_label),
+                _status_strip_html(last_fps, last_latency_ms, len(result.tracks))
+                + _secondary_kpi_html(frame_count, detections_total, len(track_ids), dropped_total, source_label),
                 unsafe_allow_html=True,
             )
 
@@ -445,19 +455,19 @@ def _execute_run(source, source_label, detector_config, tracker_config, log_dir,
             current_track_ids = {t.track_id for t in result.tracks}
             for new_id in sorted(current_track_ids - active_track_ids):
                 st.session_state.event_lines.append(
-                    theme.event_line("completed", "ACQUIRED", f"target #{new_id} — frame {result.frame_index}")
+                    theme.event_line("acquired", "ACQUIRED", f"target #{new_id} — frame {result.frame_index}")
                 )
             for lost_id in sorted(active_track_ids - current_track_ids):
                 st.session_state.event_lines.append(
-                    theme.event_line("running", "LOST", f"target #{lost_id} — frame {result.frame_index}")
+                    theme.event_line("lost", "LOST", f"target #{lost_id} — frame {result.frame_index}")
                 )
             active_track_ids = current_track_ids
 
             if result.dropped:
-                line = theme.event_line("error", "DROPPED", f"frame {result.frame_index} — {result.error or 'unknown error'}")
+                line = theme.event_line("dropped", "DROPPED", f"frame {result.frame_index} — {result.error or 'unknown error'}")
             else:
                 line = theme.event_line(
-                    "neutral", "FRAME",
+                    "frame", "FRAME",
                     f"#{result.frame_index} · {result.detection_count} det · {len(result.tracks)} trk · {result.total_ms:.1f} ms total",
                 )
             st.session_state.event_lines.append(line)
@@ -498,6 +508,7 @@ def _execute_run(source, source_label, detector_config, tracker_config, log_dir,
         "dropped_total": dropped_total,
         "unique_tracks": len(track_ids),
         "fps": last_fps,
+        "latency_ms": last_latency_ms,
         "source_label": source_label,
     }
 
@@ -516,10 +527,19 @@ def _error_panel_html() -> str:
     return theme.panel("Run failed", body)
 
 
+_EVENT_LOG_LEGEND = (
+    '<div class="kpi-sub" style="margin-bottom:0.6rem;">'
+    '<b style="color:#35d07f">ACQUIRED</b> new target confirmed &nbsp;&middot;&nbsp; '
+    '<b style="color:var(--zds-accent)">LOST</b> target no longer tracked &nbsp;&middot;&nbsp; '
+    '<b style="color:#f24141">DROPPED</b> frame processing error'
+    "</div>"
+)
+
+
 def _event_log_html() -> str:
     lines = st.session_state.event_lines
     body = "".join(lines) if lines else '<span style="color:rgba(230,237,243,0.4)">No events yet — start a run to see live output.</span>'
-    return theme.panel("Event log", f'<div class="event-log">{body}</div>')
+    return theme.panel("Event log", f'{_EVENT_LOG_LEGEND}<div class="event-log">{body}</div>')
 
 
 def _summary_panel_html() -> str:
@@ -572,7 +592,7 @@ def _render_state_panels(placeholders: dict, source_label: str | None) -> None:
     state = st.session_state.app_state
 
     if state == "idle":
-        kpi_ph.empty()
+        kpi_ph.markdown(_status_strip_html(0.0, 0.0, 0), unsafe_allow_html=True)
         frame_ph.markdown(
             theme.empty_state("No feed yet", "Choose a video source in the sidebar — Demo mode needs nothing else — then press Start run."),
             unsafe_allow_html=True,
@@ -582,7 +602,7 @@ def _render_state_panels(placeholders: dict, source_label: str | None) -> None:
         telemetry_ph.empty()
 
     elif state == "ready":
-        kpi_ph.empty()
+        kpi_ph.markdown(_status_strip_html(0.0, 0.0, 0), unsafe_allow_html=True)
         frame_ph.markdown(
             theme.empty_state("Ready to run", f"Source selected: {html.escape(source_label or '—')}. Press Start run in the sidebar to begin."),
             unsafe_allow_html=True,
@@ -596,11 +616,15 @@ def _render_state_panels(placeholders: dict, source_label: str | None) -> None:
 
     elif state == "completed":
         kpi = st.session_state.last_kpi or {}
+        # The run has finished, so nothing is *currently* active — "Active
+        # tracks" correctly reads 0; how many distinct targets were seen
+        # over the whole run is "Unique tracks" in the row below instead.
         kpi_ph.markdown(
-            _kpi_html(
-                kpi.get("frame_count", 0), kpi.get("detections_total", 0), kpi.get("unique_tracks", 0),
-                kpi.get("dropped_total", 0), kpi.get("fps", 0.0), st.session_state.detector_backend,
-                st.session_state.tracker_backend, kpi.get("source_label", source_label),
+            _status_strip_html(kpi.get("fps", 0.0), kpi.get("latency_ms", 0.0), 0)
+            + _secondary_kpi_html(
+                kpi.get("frame_count", 0), kpi.get("detections_total", 0),
+                kpi.get("unique_tracks", 0), kpi.get("dropped_total", 0),
+                kpi.get("source_label", source_label),
             ),
             unsafe_allow_html=True,
         )
@@ -613,7 +637,16 @@ def _render_state_panels(placeholders: dict, source_label: str | None) -> None:
         _render_telemetry_export(telemetry_ph)
 
     elif state == "error":
-        kpi_ph.empty()
+        kpi = st.session_state.last_kpi or {}
+        kpi_ph.markdown(
+            _status_strip_html(kpi.get("fps", 0.0), kpi.get("latency_ms", 0.0), 0)
+            + _secondary_kpi_html(
+                kpi.get("frame_count", 0), kpi.get("detections_total", 0),
+                kpi.get("unique_tracks", 0), kpi.get("dropped_total", 0),
+                kpi.get("source_label", source_label),
+            ),
+            unsafe_allow_html=True,
+        )
         if st.session_state.last_frame is not None:
             frame_ph.image(cv2.cvtColor(st.session_state.last_frame, cv2.COLOR_BGR2RGB), channels="RGB", width="stretch")
         else:
@@ -647,7 +680,8 @@ elif st.session_state.app_state == "ready" and not _sidebar["can_run"]:
 _render_header()
 
 kpi_placeholder = st.empty()
-frame_col, info_col = st.columns([2, 1])
+frame_col, info_col = st.columns([3, 1])
+frame_col.markdown(theme.panel_label("Live feed"), unsafe_allow_html=True)
 frame_placeholder = frame_col.empty()
 info_placeholder = info_col.empty()
 debug_placeholder = st.empty()
