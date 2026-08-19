@@ -46,6 +46,7 @@ def build_detector(config: dict[str, Any] | None = None) -> BaseDetector:
         return DroneDetector(
             weights_path=config.get("weights_path", ""),
             confidence_threshold=config.get("confidence_threshold", 0.35),
+            nms_thresh=config.get("nms_thresh", 0.45),
         )
 
     raise ValueError(

@@ -120,3 +120,117 @@ different roles (train / eval-frozen-test), so the actual paths are wired
 directly into the training and eval configs (`config/dut_train.yaml`,
 `eval/config/dut_anti_uav.yaml`) rather than forced through one field
 that can't represent "which split for what purpose."
+
+## `visiodect` — ingested, not yet trained on
+
+A copy was supplied for this pass (not downloaded by this repo) and
+ingested via a new converter (`detector/datasets/visiodect.py`). Per the
+task this was done under: made available and reported on, **not** trained
+on — no config/training run touches it yet.
+
+**Real structure, verified by inspecting the extracted archive directly
+before writing any loader code** (not assumed from documentation): one
+directory per UAV model, each with `images/<Scenario>/` (Title-case:
+Evening/Cloudy/Sunny) and `labels/<scenario>/` (lowercase) holding up to
+three parallel annotation formats for the same boxes — `csv.csv` (one row
+per box: `class_name,xmin,ymin,width,height,file_name,img_width,img_height`,
+absolute pixels, no header), a `txt/` directory (YOLO-style, normalized),
+and a `voc/` directory (Pascal-VOC XML). All three formats were spot-checked
+against each other for one image and agree exactly. **CSV is the only
+format present for every populated model/scenario** — `txt`/`voc` are
+missing entirely for some scenarios and badly incomplete for others (e.g.
+`Anafi-Extended/Evening`: 1200 images, csv rows for all 1200, but only 801
+`txt` files and none at all under `Anafi-Extended/labels/cloudy/`) — so the
+converter reads `csv.csv` exclusively.
+
+**Coverage actually supplied — six UAV models documented, three populated:**
+
+| UAV model | Data present? |
+|---|---|
+| Anafi-Extended | Yes |
+| DJIFPV | Yes |
+| DJIPhantom | Yes (partial — see below) |
+| EFT-E410S | **No — empty directory skeleton only** (`images/<Scenario>/`, `labels/<scenario>/{voc,txt}/` all exist, zero files in any of them) |
+| Mavic_Air | **No — empty directory skeleton only**, same as above |
+| Mavic_Enterprise | **No — empty directory skeleton only**, same as above |
+
+**Real conversion output** (`python detector/datasets/visiodect.py
+--raw-dir data/visiodect/raw --output-dir data/visiodect/converted`, then
+re-verified by loading the converted output back through
+`detector/datasets/loader.py`):
+
+| Model | Scenario | Images on disk | Annotated | Drone instances | Orphaned annotations | Degenerate skipped | Format |
+|---|---|---|---|---|---|---|---|
+| Anafi-Extended | Evening | 1200 | 1200 | 1200 | 0 | 0 | csv |
+| Anafi-Extended | Cloudy | 1200 | 1200 | 1202 | 0 | 2 | csv |
+| Anafi-Extended | Sunny | 1071 | 989 | 1053 | 0 | 0 | csv |
+| DJIFPV | Evening | 1200 | 1127 | 1127 | 0 | 0 | csv |
+| DJIFPV | Cloudy | 1200 | 1112 | 1112 | 0 | 0 | csv |
+| DJIFPV | Sunny | 1200 | 1200 | 1200 | 0 | 0 | csv |
+| DJIPhantom | Evening | **0** | 0 | 0 | **1200** | 0 | csv |
+| DJIPhantom | Cloudy | 900 | 900 | 901 | 0 | 0 | csv |
+| DJIPhantom | Sunny | 203 | 0 | 0 | 0 | 0 | **xlsx (not ingested)** |
+| EFT-E410S / Mavic_Air / Mavic_Enterprise | all | 0 | 0 | 0 | 0 | 0 | none |
+| **TOTAL** | | **8174** | | **7795** | **1200** | **2** | |
+
+446 images (8174 - annotated-image count) are hard negatives (zero boxes)
+in the converted output.
+
+**Box-size distribution of all 7795 drone instances** (same area buckets
+as `eval/metrics.py`'s small-object convention, 1024px²=32x32):
+
+| Bucket | Count | % |
+|---|---|---|
+| <16x16 (<256px²) | 46 | 0.6% |
+| 16x16-32x32 (256-1024px²) | 1126 | 14.4% |
+| 32x32-64x64 (1024-4096px²) | 4700 | 60.3% |
+| 64x64-128x128 (4096-16384px²) | 1560 | 20.0% |
+| >=128x128 (>=16384px²) | 363 | 4.7% |
+
+**Read on this, directly answering "what coverage does this actually
+give us":** only half the documented UAV models (3 of 6) have any data in
+the copy supplied, and all three scenarios (sunny/cloudy/evening) are
+present only for those three. Despite including an "FPV" model category
+(`DJIFPV`), the box-size distribution skews toward *larger*, not smaller,
+targets than `dut-anti-uav`: only ~15% of instances fall under the same
+1024px² "small" threshold here (46+1126 of 7795), vs. 37.8-53.5% for
+`dut-anti-uav`'s three splits. **This dataset, as currently supplied, is
+not primarily a source of very-small/distant-target coverage** — it adds
+model-type and lighting-condition diversity (three additional real
+airframes, three lighting conditions DUT Anti-UAV doesn't label
+separately), not the small-object signal one might assume from "FPV" being
+present.
+
+**Three real data-quality/completeness issues found, handled explicitly
+by the converter, not silently:**
+1. Three of six model directories are empty structure only (above).
+2. `DJIPhantom/labels/evening/csv.csv` has 1200 annotation rows for image
+   files that do not exist anywhere in the supplied copy — skipped and
+   counted (`num_orphaned_annotations`), never fabricated into a training
+   target for a nonexistent file.
+3. `DJIPhantom/labels/sunny/csv.xlsx` is the only non-CSV annotation file
+   in the whole archive (203 images) — not parsed; no spreadsheet-parsing
+   dependency was added for one outlier. Images are still counted as
+   present on disk; they carry no boxes in the converted output.
+
+**License: UNVERIFIED, `commercial_ok` unknown — and will stay that way
+until someone supplies more than this archive.** The full extracted tree
+was searched for a LICENSE file, README, or any attribution/terms text of
+any kind — **none exists in the copy supplied for this pass.** This is a
+stronger negative than `dut-anti-uav`'s situation (which at least has a
+repo-level Apache-2.0 file, even though its scope is disputed): here there
+is nothing to cite at all. Per `detector/datasets/manifest.py`'s own
+rules, `license_id` stays the literal string `"UNVERIFIED"` and
+`commercial_ok` stays `None` — not a guess, not an inference from the
+dataset's evident research origin. `detector/train.py --commercial-only`
+will refuse this dataset exactly as it refuses `dut-anti-uav` today.
+
+**Local layout** (gitignored, same as every other dataset under `data/`):
+
+```
+data/visiodect/raw/<Model>/images/<Scenario>/*.jpg
+data/visiodect/raw/<Model>/labels/<scenario>/csv.csv   # + txt/, voc/ where present (unused by the converter)
+data/visiodect/converted/images/                        # this repo's unified schema, symlinked not copied
+data/visiodect/converted/annotations.json
+data/visiodect/converted/conversion_stats.json          # the real per-model/scenario table above, machine-readable
+```

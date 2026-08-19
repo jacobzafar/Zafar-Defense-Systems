@@ -713,3 +713,118 @@ on `FrameResult`/`RunSummary`/session state. No weapon/effector UI of any
 kind, consistent with every prior entry in this log. Full suite: 173
 passed, 0 failed (170 from entry #16 + 3 new `tests/test_overlay.py`
 cases).
+
+## 18. Diagnosing the "98-193 near-identical boxes" symptom: three hypotheses tested against real data, one confirmed
+
+Entry #15/`eval/REPORT.md` left the fine-tuned `drone_v1` detector's
+flood of near-identical, low-confidence boxes attributed to
+"undertrained, not fundamentally broken" — a reasonable inference from
+the loss curve, but an inference, not a direct measurement. This pass
+tested three concrete, more-specific hypotheses against the actual model
+and its actual predictions before touching anything, per the explicit
+instruction to report before changing.
+
+**(a) Is NMS missing or misconfigured?** No. `detector/train.py`'s
+`build_single_class_model()` only swaps `SSDLite320_MobileNet_V3_Large`'s
+classification head — everything else, including postprocessing, is the
+stock model. Verified directly on the loaded instance:
+`score_thresh=0.001, nms_thresh=0.55, topk_candidates=300,
+detections_per_img=300` — all inherited from torchvision's
+`ssdlite320_mobilenet_v3_large()` factory (its own defaults, tuned for
+80-class COCO detection, not this codebase's choice). NMS
+(`torchvision.models.detection.ssd.SSD.postprocess_detections` →
+`box_ops.batched_nms`) runs unconditionally in the model's own eval-mode
+forward pass. It is not missing.
+
+But the *symptom* — "near-identical overlapping boxes" — has a precise,
+measurable mechanism: sampling 15 real test images and computing the
+maximum pairwise IoU among every image's surviving (confidence ≥ 0.35)
+boxes gave **0.546-0.550 in every single image** — clustered mechanically
+just under the 0.55 NMS cutoff. That is exactly what "near-identical" a
+0.55 IoU threshold permits, not evidence NMS silently failed.
+
+Fixed anyway, as a real (if modest) improvement: `nms_thresh` tightened
+to **0.45** — the plain `SSD` base class's own tighter default in this
+exact torchvision version (not a value picked to fit this eval set) —
+now set explicitly in `DroneDetector.__init__` (`detector/drone_detector.py`)
+instead of silently inheriting the COCO-tuned factory's looser value, and
+exposed through `detector/factory.py`'s config dict
+(`tests/test_drone_detector.py` covers both the new default and that it's
+configurable). Re-evaluated on the *same, unretrained* `models/dut_v1/`
+weights — zero retraining: AP@0.5 moved **0.1895 → 0.1914** (+0.0019,
+noise, not the "may move substantially" the hypothesis predicted if NMS
+were actually wrong), while small-object recall **dropped** 0.2524 →
+0.2300 (214 → 195 GT boxes matched) — tightening NMS occasionally
+suppresses a redundant-but-lucky box that happened to be a small GT
+box's best match, a real and measured trade-off, not hidden here. Net:
+NMS was a real, principled thing to tighten, but not the fix.
+
+**(b) Optimization/classification collapse?** Confirmed, decisively, by
+direct measurement rather than inferring it from `training_report.json`'s
+two epoch-loss numbers alone. Sampled every raw (pre-confidence-filter)
+"drone"-class prediction score across the same 15 real test images:
+**2,299 scores, all within [0.4277, 0.4531]** — a band 0.025 wide, 100%
+inside a single bin of a ten-bin [0,1] histogram. The classification head
+is not discriminating drone-vs-background by spatial location at all; it
+emits a near-constant, barely-above-the-0.35-threshold score almost
+everywhere. This, not NMS, is the real reason so many boxes cross the
+confidence cutoff — nearly every anchor scores similarly, and NMS (working
+correctly, per (a)) can only suppress the subset whose IoU with each
+other exceeds its threshold.
+
+**(c) Is the learning rate too high?** The premise in this task's
+instructions (`config/dut_train.yaml` uses 0.005) does not match the
+file: it already uses `learning_rate: 0.001`, the fix already applied in
+entry #14 for the original NaN-divergence incident (0.005 was the *old*
+default before that fix). Corrected and tested anyway as a real,
+controlled comparison rather than skipped: `config/dut_train_lr0005.yaml`
+— identical dataset/split/seed(42)/epochs(2), `learning_rate: 0.0005`
+only, writing to `models/dut_v1_lr0005/` so the original run and config
+are untouched. Result: **worse, not better.** Final training loss 4.500
+vs. 4.487 (no meaningful difference — both are just the epoch-2 average
+after the same 1,300-batch budget); evaluated with the same
+`nms_thresh=0.45`: AP@0.5 **0.1606** (vs. 0.1914), small-object recall
+**0.1297**, 110/848 (vs. 0.2300, 195/848); the same narrow-band collapse
+persisted, just at a different constant (`[0.4651, 0.4871]`). A lower
+learning rate makes *less* progress in the same fixed step budget — it
+cannot fix a freshly-initialized classification head that hasn't been
+trained long enough, and this run demonstrates that rather than assuming
+it.
+
+**Which hypothesis the evidence supports: (b), decisively — this is
+undertraining, evidenced directly (a literal narrow-band score
+histogram), not inferred from a loss curve, and with two plausible
+alternative explanations (NMS misconfiguration, this specific LR change)
+actually tested and ruled out rather than assumed away.** Neither (a)'s
+fix nor (c)'s comparison meaningfully moves the number; `nms_thresh=0.45`
+is kept as the new default on its own principled merits, and
+`models/dut_v1_lr0005/` plus its config are kept for the record (a real
+negative result), not deleted.
+
+**The real number, current best configuration** (`models/dut_v1/weights.pt`,
+lr=0.001, 2 epochs, `nms_thresh=0.45`), from a fresh
+`python -m eval.harness --config eval/config/dut_anti_uav.yaml` run
+against the same frozen 2200-image DUT Anti-UAV test split as entry #15
+(see `eval/REPORT.md` for the full metric card and restored baseline
+table):
+
+| Metric | This run | Published baseline range (Zhao et al., Table II) |
+|---|---|---|
+| AP@0.5 | **0.1914** | 0.400 (YOLOX-ResNet18, fastest) — 0.683 (Cascade-RCNN-ResNet50, best) |
+| Small-object recall | **0.2300** (195/848) | not reported by the paper |
+| Latency (mean) | **62.03 ms** (16.12 FPS, CPU) | not directly comparable — no GPU in this environment |
+
+Still well below every published baseline — this pass does not claim
+otherwise. What changed is *why*: that gap is now attributable to a
+specifically-evidenced collapsed classification head after only ~1,300
+optimizer steps on a freshly-initialized head, with NMS and this
+particular LR change directly tested and ruled out as the explanation,
+rather than "probably just needs more training." The next lever remains
+what `docs/STATUS.md` §6 already said: train longer — this pass is the
+evidence for why that's the right call, not a substitute for doing it.
+
+**Verified, not assumed:** every number above comes from an actual
+`eval.harness`/`detector/train.py` run in this pass, cross-checked
+against a from-scratch diagnostic script (pairwise-IoU and score-histogram
+measurements) independent of the harness itself. Full test suite: run
+below, before committing.

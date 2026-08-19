@@ -1,0 +1,23 @@
+# Controlled learning-rate comparison against config/dut_train.yaml, run to
+# test whether the current learning_rate (0.001) is why the classification
+# head collapsed to a near-constant output after 2 epochs (see
+# docs/DECISIONS.md entry #18 for the full diagnosis: measured directly
+# against the model's own real predictions, 2299 sampled raw scores across
+# 15 real test images all fell within [0.4277, 0.4531] — essentially one
+# value, not a spread).
+#
+# Everything else is held identical to config/dut_train.yaml on purpose —
+# same dataset, same split (val_fraction 0.0, DUT's own split kept intact),
+# same seed, same 2 epochs — so learning_rate is the only variable. Writes
+# to its own output_dir; config/dut_train.yaml and models/dut_v1/ are left
+# untouched so both runs remain available for comparison.
+dataset_dir: data/dut-anti-uav/converted/train
+output_dir: models/dut_v1_lr0005
+target_class: drone
+val_fraction: 0.0
+epochs: 2
+batch_size: 8
+learning_rate: 0.0005
+seed: 42
+device: cpu
+dataset_name: dut-anti-uav

@@ -182,17 +182,43 @@ DATASET_REGISTRY: dict[str, DatasetManifest] = {
     ),
     "visiodect": DatasetManifest(
         name="VisioDECT",
-        description="Drone detection dataset. TODO: confirm current source and edition.",
+        description=(
+            "Drone-detection dataset organized per UAV model (six documented: "
+            "Anafi-Extended, DJIFPV, DJIPhantom, EFT-E410S, Mavic_Air, "
+            "Mavic_Enterprise) x lighting scenario (Evening/Cloudy/Sunny). "
+            "Single 'drone' class; boxes given in absolute pixels, available in "
+            "up to three parallel annotation formats (CSV, YOLO txt, Pascal-VOC "
+            "XML) though CSV is the only one consistently present across "
+            "scenarios in the copy this was verified against. See "
+            "detector/datasets/visiodect.py and docs/datasets.md for exact real "
+            "counts, per-model/scenario coverage, and known gaps (three of the "
+            "six model directories were present only as empty structure, no "
+            "data; see docs/datasets.md before assuming full coverage)."
+        ),
         classes=["drone"],
         license=LicenseStatus.UNVERIFIED,
         license_notes=(
-            "Not yet verified by a maintainer of this repo. Confirm the current "
-            "license/terms directly from the dataset's official source before "
-            "downloading or using it."
+            "No LICENSE file, README, or any other license/attribution text was "
+            "found anywhere in the archive supplied for this pass (verified by "
+            "searching the full extracted tree) — there is nothing to cite yet, "
+            "not merely something unconfirmed. Confirm the current license/terms "
+            "directly from the dataset's official source/publication before "
+            "downloading or using it for anything beyond internal evaluation."
         ),
-        source_url=None,  # TODO: fill in from the current official source
-        local_path=None,  # TODO
-        notes="TODO: confirm annotation format and class taxonomy.",
+        source_url=None,  # TODO: fill in from the dataset's official source/publication — not present in the supplied archive
+        license_id="UNVERIFIED",  # no license file found in the supplied archive — see license_notes
+        commercial_ok=None,  # cannot be anything but unknown without a license file to confirm it from
+        local_path=None,  # set via config, same convention as dut-anti-uav — see docs/datasets.md
+        notes=(
+            "Ingested (not yet trained on): 8174 images, 7795 drone instances, 446 "
+            "hard-negative (unannotated) images, across only 3 of the 6 documented "
+            "UAV models (Anafi-Extended, DJIFPV, DJIPhantom) in the copy supplied "
+            "for this pass. Box-size distribution skews notably larger than "
+            "dut-anti-uav's (only ~15% under the same 1024px² 'small' threshold, "
+            "vs. 37.8-53.5% for dut-anti-uav) — despite including an 'FPV' model "
+            "category, this copy is not primarily a source of very-small/distant "
+            "targets. See docs/datasets.md for the full per-model/scenario table."
+        ),
     ),
 }
 

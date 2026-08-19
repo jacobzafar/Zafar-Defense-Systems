@@ -1,7 +1,7 @@
 # Project status
 
 **Zafar Defense Systems — Anti-UAV Detection Software MVP**
-*Generated from the actual state of `feature/software-mvp-scaffold`, 2026-07-22 (facts below are current as of immediately before this document's own commit). Observation-only: this repository contains no jamming, kinetic, or effector/turret-actuation logic anywhere, and none is planned in this branch.*
+*Generated from the actual state of `feature/software-mvp-scaffold`, 2026-07-22; §2/§3 numbers refreshed 2026-07-23 after `docs/DECISIONS.md` entry #18 (§5's repository facts below are as of 2026-07-22 and have not been re-verified for this update). Observation-only: this repository contains no jamming, kinetic, or effector/turret-actuation logic anywhere, and none is planned in this branch.*
 
 This document describes what actually exists and runs in this repository
 today — not a roadmap, not a pitch. Every number below is either read
@@ -52,30 +52,29 @@ train split.
 
 | Metric | Value | Source |
 |---|---|---|
-| AP@0.5 (single-class "drone") | **0.1895** | `eval/REPORT.md`, `eval/output/dut_anti_uav_metric_card.json` |
-| Small-object recall (area < 32×32px) | **0.2524** (214/848) | same |
-| Latency, mean | **60-63 ms/frame** (CPU, no GPU in this environment) | same |
+| AP@0.5 (single-class "drone") | **0.1914** | `eval/REPORT.md`, `eval/output/dut_anti_uav_metric_card.json` |
+| Small-object recall (area < 32×32px) | **0.2300** (195/848) | same |
+| Latency, mean | **~57-63 ms/frame** (CPU, no GPU in this environment) | same |
 | Throughput | **~16-17 FPS** (CPU) | same |
 | Published baseline range on this exact split | 0.400 (fastest, YOLOX-ResNet18) to 0.683 (best, Cascade-RCNN-ResNet50) mAP | Zhao et al., Table II, cited directly in `eval/REPORT.md` |
 
-**Read on this result:** 0.1895 AP@0.5 is well below every published
-baseline for this dataset — expected and unsurprising for a 2-epoch,
-correctness-focused run (the goal was proving the training/eval loop
-works end-to-end on real data, not competing on accuracy). Visual
-inspection (`tools/render_detections.py`, 100 real test images, run
-2026-07-22) confirms this concretely rather than just numerically: at
-the detector's configured confidence threshold (0.35), the model
-produces **98-193 near-identical, low-confidence (~0.43) boxes per
-frame** (measured across the same 100-image sample, `renders/dut_test_sample/manifest.json`),
-scattered across nearly every frame, rather than a small
-number of localized, high-confidence detections. This is the visual
-signature of a detector that has not converged, not a rendering bug —
-confirmed by inspecting raw per-image detection counts and score
-distributions directly. **This model is not currently usable as-is; it
-is proof the pipeline works end-to-end, not a working detector.**
+**Read on this result:** 0.1914 AP@0.5 is well below every published
+baseline for this dataset — and this pass (2026-07-23) replaced "expected
+and unsurprising for a 2-epoch run" (an inference from the loss curve)
+with a direct measurement of *why*: sampling the model's own raw
+prediction scores across 15 real test images found 2,299 of them **all
+within [0.4277, 0.4531]** — a band 0.025 wide, entirely inside one bin of
+a ten-bin histogram. The classification head is not discriminating
+drone-vs-background by location at all; that, not NMS or the training
+learning rate (both directly tested — see below), is why the model
+produces dozens to ~150 near-identical, near-constant-confidence boxes
+per frame, scattered across nearly every frame, instead of a small
+number of localized, high-confidence detections. **This model is not
+currently usable as-is; it is proof the pipeline works end-to-end, not a
+working detector.**
 
-Two real bugs were found and fixed while producing this result, not
-worked around:
+Three real bugs/hypotheses were found, tested, and fixed or ruled out
+while producing this result, not worked around or assumed away:
 - The first fine-tuning attempt diverged to `NaN` weights (234/476
   tensors) at the training script's previous default learning rate.
   Diagnosed on real data, fixed with gradient clipping + a lower default
@@ -86,6 +85,16 @@ worked around:
   unmeasurable on this eval set (see §3) — both looked like real, good
   results. Fixed to report an explicit not-measurable state instead
   (`docs/DECISIONS.md` entry #15).
+- The "near-identical boxes" symptom above was tested against three
+  concrete hypotheses (NMS missing/misconfigured, classification
+  collapse, learning rate too high) rather than left as "probably just
+  undertrained": NMS turned out to be present and correctly wired (just
+  tuned loose — tightened, but zero-retrain AP@0.5 barely moved, 0.1895→
+  0.1914); a real controlled learning-rate comparison (0.0005 vs. the
+  current 0.001 — the task's assumption of a stale 0.005 default didn't
+  match the file) made things *worse*, not better (AP@0.5 0.1606); the
+  score-collapse hypothesis was the one confirmed by direct measurement.
+  Full diagnosis in `docs/DECISIONS.md` entry #18.
 
 ---
 
@@ -109,9 +118,15 @@ worked around:
   only. No infrared/thermal data has been sourced, converted, or
   evaluated anywhere in this repo.
 - **FPV-class / very-small / high-speed targets: not specifically
-  evaluated.** The eval set's small-object recall (0.2524) is the
-  closest existing signal, and it's weak — but no FPV-specific dataset
-  or scenario has been tested.
+  evaluated.** The eval set's small-object recall (0.2300) is the
+  closest existing signal, and it's weak. VisioDECT (see `docs/
+  datasets.md`) has been ingested and does include a `DJIFPV` model
+  category, but it has not been trained or evaluated on yet, and its own
+  box-size distribution skews *larger*, not smaller, than DUT
+  Anti-UAV's — measured directly, only ~15% of its instances fall under
+  the same 1024px² "small" threshold, vs. 37.8-53.5% for DUT Anti-UAV.
+  Treat "FPV data exists in this repo" and "small/FPV-class coverage is
+  solved" as two separate claims — only the first is currently true.
 - **Real-world (non-benchmark) footage: never evaluated.** Every real
   number above comes from a static-image research benchmark, not live
   camera footage, a real deployment environment, or footage resembling
@@ -133,9 +148,9 @@ Full detail: **`docs/datasets.md`**. Summary:
 | Dataset | Status | License (`license_id`) | `commercial_ok` |
 |---|---|---|---|
 | DUT Anti-UAV (detection subset) | **Downloaded, converted, in active use** | `UNVERIFIED` | `unknown` |
+| VisioDECT | **Ingested (8174 images, 3 of 6 documented UAV models), not yet trained on** — see `docs/datasets.md` | `UNVERIFIED` — no license file found anywhere in the supplied archive | `unknown` |
 | Anti-UAV | Registry placeholder only, no data | `UNVERIFIED` | `unknown` |
 | Drone-vs-Bird | Registry placeholder only, no data | `UNVERIFIED` | `unknown` |
-| VisioDECT | Registry placeholder only, no data | `UNVERIFIED` | `unknown` |
 
 **Flag for commercial use / acquisition due diligence:** DUT Anti-UAV's
 own GitHub repository (`wangdongdut/DUT-Anti-UAV`) carries a real,
