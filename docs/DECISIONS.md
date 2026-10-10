@@ -866,3 +866,28 @@ Hand-computed regression test: two GT boxes with a TP at 0.9, an FP at
 at 0.35 (`tests/test_eval_metrics.py`); plus a harness-level test that a
 perfect detector scoring only 0.2 now gets AP 1.0 (was 0.0) while its
 operating-point recall at 0.35 stays 0.
+
+**Re-run on the frozen DUT test set (2026-10-10).** Reachable weights:
+`models/dut_v1/` and `models/dut_v1_lr0005/` only; dut_v2 (trained on
+Colab) is not in this environment, so it was not evaluated. Results, in
+`eval/REPORT.md`:
+
+- The cutoff bug was real but **changed nothing for these two models**:
+  0 of their 311,991 / 230,815 raw detections score below 0.35 (their
+  collapsed score bands are 0.427-0.469 and 0.465-0.501). The AP shift
+  (dut_v1 0.1914 → 0.1929, lr0005 0.1606 → 0.1613) is entirely from
+  removing score rounding, confirmed by re-applying the 0.35 cutoff to the
+  same unrounded detections (identical AP).
+- AP@0.5 by COCO size for dut_v1: small 0.0016 (848 GT), medium 0.0218
+  (836), large 0.7294 (561). AP@[0.50:0.95] 0.1074.
+- dut_v1 on the same 500-image seeded DUT val subset dut_v2's per-epoch
+  eval used: AP@0.5 0.0934 (small 0.0023, medium 0.0166, large 0.6879).
+  That subset is 52% small / 13% large (vs. 38% / 25% on test), which
+  alone halves dut_v1's AP relative to the test set. dut_v2's reported
+  ~0.09-0.10 val AP (with the cutoff, so a lower bound) is therefore
+  roughly level with dut_v1 on the same images — not evidence of a
+  measurement bug hiding a much better model.
+
+**Read:** the ~0.1 val / ~0.19 test numbers are real for these models;
+the gap to published baselines is a genuine small/medium-object
+detection problem (large-object AP is ~0.73), not an evaluation artifact.
