@@ -8,6 +8,11 @@ real footage for it exists and its provenance/license is known (cross-
 reference `detector/datasets/manifest.py` if it comes from one of the
 named public datasets there).
 
+For our own captured footage, coverage is generated, not hand-logged:
+`tools/coverage_report.py` reads each clip's metadata from
+`tools/ingest_footage.py` — see `docs/data-capture-runbook.md`. This
+template remains for externally sourced datasets.
+
 This complements, and does not replace, `eval/README.md` (the frozen
 eval-set policy) and `docs/known-limitations.md`.
 
