@@ -1025,3 +1025,67 @@ not in this environment, so there is no checkpoint-selected 320 model to
 compare against. Each arm's best epoch is chosen on val500 with
 `eval/select_checkpoint.py`, then reported once on test
 (`eval/config/dut_anti_uav_test_640.yaml` / `_test_320_control.yaml`).
+
+## 23. Recommendation (not implemented): anchors / feature maps for small drones
+
+Written before implementing anything heavy, per instruction, so the
+choice can be made on what #21 (tiling) measured and #22 (640) will
+measure.
+
+**Measured basis: anchor coverage on DUT *train* ground truth** (5,243
+drone boxes: 2,723 small / 1,857 medium / 663 large; train, not test,
+so this design analysis does not touch the frozen test set). For each GT
+box, scaled into the model's input, the best IoU with any anchor. SSD's
+matcher makes an anchor a normal positive only at IoU ≥ 0.5 (each GT is
+also force-matched to its single best anchor, however poor). Anchors
+depend only on input and feature-map sizes, so hypothetical layouts were
+simulated with torchvision's own `DefaultBoxGenerator` — no model built.
+
+| Layout | Anchors | Small: share ≥0.5 (median best IoU) | Medium | Large |
+|---|---|---|---|---|
+| **Stock SSDLite, 320** (dut_v1; finest map stride 16, smallest anchor 0.2 = 64px) | 3,234 | **0.0%** (0.007) | **0.7%** (0.023) | 70.3% (0.676) |
+| 640, stock anchors (#22 as prepared) | 12,828 | 0.0% (0.007) | 0.7% (0.023) | 70.4% (0.727) |
+| 320, smallest anchor 0.05 (16px), stock maps | 3,234 | 0.0% (0.092) | 11.3% (0.274) | 81.0% (0.616) |
+| 640, smallest anchor 0.05 (32px), stock maps | 12,828 | 0.0% (0.104) | 26.9% (0.357) | 91.4% (0.698) |
+| 320 + stride-8 map (40×40), smallest 16px | 12,834 | 0.0% (0.104) | 27.7% (0.357) | 98.3% (0.702) |
+| **640 + stride-8 map (80×80), smallest 16px** | 51,228 | **24.2%** (0.394) | **75.2%** (0.573) | 86.1% (0.743) |
+| 640 + stride-8 map, smallest 8px | 51,228 | 15.4% (0.375) | 33.0% (0.395) | 78.7% (0.738) |
+
+What this shows:
+
+1. With the stock model, **no small drone and <1% of medium drones in
+   the training set has a usable anchor.** Each gets one forced match with
+   IoU ~0.01-0.02 — a near-impossible regression target. That alone
+   explains small AP ≈ 0 better than undertraining does, and explains why
+   longer training (dut_v2) did not move val AP.
+2. **640 alone changes nothing** about anchor fit — it confirms #22's
+   stated expectation. It may still help through finer features, which
+   the Colab run will show, but it is not the fix.
+3. **Smaller anchors alone don't work either**: on a stride-16 grid,
+   small anchors are too sparse to land on a 5-15px object.
+4. **Only a stride-8 feature map + ~16px anchors at 640 makes small drones
+   matchable** (0% → 24%; medium 0.7% → 75%). Anchor coverage is necessary,
+   not sufficient — it does not predict AP — but without it small AP has
+   no path to move.
+
+Context from the published baselines (`eval/REPORT.md`): the SSD-VGG16
+design (0.632 in the DUT paper) includes a stride-8 (conv4_3) feature map
+that SSDLite's MobileNetV3 extractor omits, as do the FPN-based detectors
+(Faster/Cascade R-CNN, 0.605-0.683). That is consistent with this
+analysis, but it is not a controlled comparison.
+
+**Options and expected effort** (latency figures not measured unless stated):
+
+| Option | What | Effort | Expected effect / risk |
+|---|---|---|---|
+| A. Smaller anchors only | `DefaultBoxGenerator(min_ratio=0.05)` | Hours + GPU retrain | Coverage table: small stays 0%. **Not recommended alone.** |
+| B. **Stride-8 map + 16px anchors in SSDLite (at 640)** | Also take MobileNetV3's stride-8 stage into the SSDLite feature extractor, add a head level for it (fresh-initialized), 7-level anchors, min scale 0.025 | ~1-2 days code + tests, then a GPU run against #22's 640 control | Small 0% → 24% coverage, medium → 75%. Stays MobileNetV3/SSDLite, so the closest to the real-time budget; 16× the stock anchors (51k), so post-processing cost grows — latency must be measured. Risk: the new level starts untrained. |
+| C. B + tiling at inference | Combine with #21's opt-in tiles | Already built | Crude simulation (objects scaled ~2.6× as in a 3×3 tile): small coverage ~58%. Carries #21's ~6× latency — offline/GPU only. |
+| D. FPN-based architecture | torchvision RetinaNet / FCOS (ResNet50-FPN, P3 = stride 8) or Faster R-CNN MobileNetV3-FPN, with small anchors / anchor-free | ~3-5 days: new model builder, generalize train.py/DroneDetector (same torchvision loss API), retrain, re-tune | The architecture family behind the 0.60-0.68 baselines. Heavier on CPU (ResNet50-FPN likely several × SSDLite — unmeasured). Ultralytics YOLO also has a stride-8 head and is already a backend here, but its AGPL-3.0 license conflicts with this repo's commercial-provenance gate (`--commercial-only`) — a business decision, not a technical one. |
+
+**Recommendation:** do B next, evaluated against #22's 640 control with
+the same per-size table; it is the smallest change that the coverage
+measurement says can let small-drone AP move at all, and it keeps the
+real-time architecture. If B's small/medium AP on val stays far below
+the baselines, move to D rather than tuning SSDLite further. Decision is
+yours; nothing here is implemented.
