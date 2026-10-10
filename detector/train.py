@@ -36,7 +36,9 @@ docs/DECISIONS.md for the full diagnosis.
 Interruption-safe: after every epoch a `checkpoint.pt` (model weights,
 optimizer state, completed-epoch count, per-epoch history, RNG states) is
 written atomically into `output_dir`, together with an up-to-date
-`training_report.json`. Re-running the same command with the same
+`training_report.json` and that epoch's own `weights_epoch_NNN.pt` (kept,
+not overwritten, so the best epoch can be picked afterwards with
+eval/select_checkpoint.py instead of assuming the last one is best). Re-running the same command with the same
 `output_dir` resumes from that checkpoint instead of restarting — the
 reason this exists is that Colab sessions disconnect mid-run, and losing
 every completed epoch with them is not acceptable. On Colab, point
@@ -250,6 +252,10 @@ def _freeze_batchnorm(model) -> None:
 
 CHECKPOINT_FILENAME = "checkpoint.pt"
 
+
+def epoch_weights_filename(epoch: int) -> str:
+    return f"weights_epoch_{epoch:03d}.pt"
+
 # Fields whose change makes a resumed run no longer the same run. `epochs`
 # is deliberately absent (raising it is how a finished run is extended),
 # as are `device` (resume a CPU run on a GPU and vice versa) and dataset
@@ -439,6 +445,7 @@ def train(config: TrainConfig) -> dict[str, Any]:
             "val_dataset_dir": config.val_dataset_dir,
             "val_per_epoch": val_history,
             "checkpoint_path": str(checkpoint_path),
+            "epoch_weights_paths": [str(output_dir / epoch_weights_filename(e)) for e in range(1, len(epoch_losses) + 1)],
             "weights_path": str(weights_path) if status == "complete" else None,
             "torch_version": torch.__version__,
             "seed": config.seed,
@@ -478,6 +485,7 @@ def train(config: TrainConfig) -> dict[str, Any]:
             val_metrics = evaluate_on_val(model, val_eval_samples, config.target_class, device)
             val_history.append({"epoch": epoch + 1, **val_metrics})
 
+        _save_checkpoint_atomically(model.state_dict(), output_dir / epoch_weights_filename(epoch + 1))
         _save_checkpoint_atomically(
             {
                 "epoch": epoch + 1,

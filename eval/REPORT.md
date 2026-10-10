@@ -95,6 +95,15 @@ across ~0.98 some detections fell below 0.35, so its true val AP is at
 least that and possibly higher — by how much cannot be known without the
 weights.
 
+### Checkpoint selection
+
+Not possible for this dut_v2 run: `detector/train.py` kept only the
+latest `checkpoint.pt` (overwritten each epoch), so per-epoch weights —
+including epoch 3's — were never saved, on Drive or anywhere. Only the
+final epoch's weights exist. Training now keeps
+`weights_epoch_NNN.pt` per epoch, and `eval/select_checkpoint.py` ranks
+them by corrected AP; select on val, then report the chosen one on test.
+
 ## Previous pass: the box-flood diagnosis (docs/DECISIONS.md entry #18)
 
 _AP figures in this section are from before the #19 correction above (scores were rounded to 3 decimals; the 0.35 cutoff removed nothing for these models). Kept as the historical record._
