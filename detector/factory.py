@@ -47,6 +47,10 @@ def build_detector(config: dict[str, Any] | None = None) -> BaseDetector:
             weights_path=config.get("weights_path", ""),
             confidence_threshold=config.get("confidence_threshold", 0.35),
             nms_thresh=config.get("nms_thresh", 0.45),
+            tile_rows=config.get("tile_rows", 1),
+            tile_cols=config.get("tile_cols", 1),
+            tile_overlap=config.get("tile_overlap", 0.2),
+            tile_include_full_frame=config.get("tile_include_full_frame", True),
         )
 
     raise ValueError(

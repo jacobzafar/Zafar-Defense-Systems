@@ -35,6 +35,25 @@ not a clean per-frame latency. The previous clean single-run measurement
 (entry #18 pass, same weights and hardware) was **62.03 ms mean / 87.54 ms
 p95 / 16.12 FPS**; that remains the latency figure to quote.
 
+## Small-object work (docs/DECISIONS.md #20-#21)
+
+Settings are chosen on the DUT val500 subset; the frozen test set is
+reported once per chosen setting. FP counts are at the 0.35 operating
+threshold (DUT test has no hard-negative frames, so false-alarm rate per
+empty frame is not measurable; FP per frame is the stand-in). Latency is
+each run alone on this 4-core CPU.
+
+| dut_v1 on frozen test | AP@0.5 | AP@[.50:.95] | Small | Medium | Large | Recall@0.35 | TP / FP @0.35 | FP / frame | ms/frame (p95) | FPS |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Untiled, 320 (reference) | 0.1929 | 0.1074 | 0.0016 | 0.0218 | 0.7294 | 0.4548 | 1,021 / 310,970 | 141.3 | 59.39 (82.53) | 16.84 |
+| Tiled 3×3 + full frame, 320, no retraining | 0.3058 | 0.1758 | 0.0020 | 0.2899 | 0.8049 | 0.6423 | 1,442 / 658,558 | 299.3 | 355.97 (403.99) | 2.81 |
+
+Tiling fixes medium drones (13×), not small ones: SSDLite's smallest
+anchor is 0.2 of the input side (64px at 320), and a small drone is still
+only ~14×25px inside a 3×3 tile. Kept as an opt-in mode
+(`eval/config/dut_anti_uav_tiled3x3.yaml`), not the default, because of
+the 6× latency cost and doubled FPs at the operating threshold.
+
 ## AP correction (docs/DECISIONS.md entry #19)
 
 **The audit found a real confidence-cutoff bug:** `eval/harness.py`

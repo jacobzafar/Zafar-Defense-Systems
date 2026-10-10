@@ -1,0 +1,22 @@
+# eval/harness.py config: dut_v1 weights (no retraining) with tiled
+# inference — 3x3 overlapping tiles (20% overlap) plus the full frame,
+# merged with NMS (detector/tiling.py, docs/DECISIONS.md #21). The grid was
+# chosen on the DUT val500 subset (eval/config/dut_anti_uav_val500.yaml),
+# not on this test set; this config reports it once on test.
+eval_set_dir: data/frozen_eval/dut-anti-uav-test
+detector:
+  backend: drone
+  weights_path: models/dut_v1/weights.pt
+  confidence_threshold: 0.35
+  nms_thresh: 0.45
+  tile_rows: 3
+  tile_cols: 3
+  tile_overlap: 0.2
+  tile_include_full_frame: true
+tracker:
+  backend: iou
+iou_threshold: 0.5
+small_object_area_px: 1024.0
+expected_checksum: d7d58f3a2e22d3aec8814ae47f38ee145a735f53c4e9cab16c8732a1eaa2244c
+output_json_path: eval/output/dut_anti_uav_tiled3x3_metric_card.json
+output_report_path: eval/output/dut_anti_uav_tiled3x3_REPORT.md

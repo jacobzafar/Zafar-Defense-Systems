@@ -88,3 +88,57 @@ def test_nms_thresh_is_configurable(trained_weights_path):
 def test_factory_passes_nms_thresh_through(trained_weights_path):
     detector = build_detector({"backend": "drone", "weights_path": str(trained_weights_path), "nms_thresh": 0.25})
     assert detector._model.nms_thresh == pytest.approx(0.25)
+
+
+class _FakeTileModel:
+    """Returns one box at crop-local (10, 10, 20, 20) per input crop, with a
+    score that identifies the crop's position in the batch."""
+
+    nms_thresh = 0.45
+    detections_per_img = 300
+
+    def __init__(self):
+        self.crop_shapes = []
+
+    def __call__(self, images):
+        import torch
+
+        self.crop_shapes = [tuple(img.shape[1:]) for img in images]
+        return [
+            {
+                "boxes": torch.tensor([[10.0, 10.0, 20.0, 20.0]]),
+                "scores": torch.tensor([0.9 - 0.01 * i]),
+                "labels": torch.tensor([1]),
+            }
+            for i in range(len(images))
+        ]
+
+
+def test_tiled_detect_maps_tile_boxes_back_to_frame_coordinates(trained_weights_path):
+    import numpy as np
+
+    from detector.tiling import tile_grid
+
+    detector = DroneDetector(weights_path=str(trained_weights_path), confidence_threshold=0.0, tile_rows=2, tile_cols=2)
+    fake = _FakeTileModel()
+    detector._model = fake
+    frame = np.zeros((50, 100, 3), dtype=np.uint8)
+
+    detections = detector.detect(frame)
+
+    tiles = tile_grid(100, 50, 2, 2, 0.2)
+    assert fake.crop_shapes == [(50, 100)] + [(y2 - y1, x2 - x1) for x1, y1, x2, y2 in tiles]  # full frame first
+    # The full-frame box and the first tile's box coincide (both at offset 0,0)
+    # and merge under NMS; the other three tiles' boxes are offset and survive.
+    expected = sorted([(10, 10)] + [(x1 + 10, y1 + 10) for x1, y1, _, _ in tiles[1:]])
+    got = sorted((round(d.x1 * 100), round(d.y1 * 50)) for d in detections)
+    assert got == expected
+
+
+def test_factory_passes_tiling_options_through(trained_weights_path):
+    from detector.factory import build_detector
+
+    detector = build_detector(
+        {"backend": "drone", "weights_path": str(trained_weights_path), "tile_rows": 3, "tile_cols": 3, "tile_overlap": 0.25}
+    )
+    assert (detector.tile_rows, detector.tile_cols, detector.tile_overlap, detector.tile_include_full_frame) == (3, 3, 0.25, True)

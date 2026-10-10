@@ -48,6 +48,10 @@ class DroneDetector(BaseDetector):
         weights_path: str,
         confidence_threshold: float = 0.35,
         nms_thresh: float = 0.45,
+        tile_rows: int = 1,
+        tile_cols: int = 1,
+        tile_overlap: float = 0.2,
+        tile_include_full_frame: bool = True,
     ) -> None:
         if not _TORCH_AVAILABLE:
             raise ImportError(
@@ -98,10 +102,45 @@ class DroneDetector(BaseDetector):
 
         self._preprocess = SSDLite320_MobileNet_V3_Large_Weights.DEFAULT.transforms()
 
+        # Tiled inference (detector/tiling.py): 1x1 = the plain full-frame
+        # path. Otherwise every overlapping tile (plus, optionally, the
+        # whole frame — so large drones cut by tile seams are still seen
+        # whole) runs through the model in one batch; boxes are mapped back
+        # to frame coordinates and merged across crops with the same NMS
+        # threshold, capped at the model's own detections_per_img.
+        self.tile_rows = tile_rows
+        self.tile_cols = tile_cols
+        self.tile_overlap = tile_overlap
+        self.tile_include_full_frame = tile_include_full_frame
+
     def warmup(self) -> None:
         dummy = torch.zeros(3, 320, 320, dtype=torch.uint8)
         with torch.no_grad():
             self._model([self._preprocess(dummy)])
+
+    def _run_model(self, tensor, width: int, height: int) -> dict:
+        if self.tile_rows * self.tile_cols == 1:
+            with torch.no_grad():
+                return self._model([self._preprocess(tensor)])[0]
+
+        from torchvision.ops import nms
+
+        from detector.tiling import tile_grid
+
+        crops = tile_grid(width, height, self.tile_rows, self.tile_cols, self.tile_overlap)
+        if self.tile_include_full_frame:
+            crops = [(0, 0, width, height)] + crops
+        with torch.no_grad():
+            outputs = self._model([self._preprocess(tensor[:, y1:y2, x1:x2]) for (x1, y1, x2, y2) in crops])
+
+        boxes, scores, labels = [], [], []
+        for (x1, y1, _x2, _y2), out in zip(crops, outputs):
+            boxes.append(out["boxes"] + torch.tensor([x1, y1, x1, y1], dtype=out["boxes"].dtype))
+            scores.append(out["scores"])
+            labels.append(out["labels"])
+        boxes, scores, labels = torch.cat(boxes), torch.cat(scores), torch.cat(labels)
+        keep = nms(boxes, scores, self._model.nms_thresh)[: self._model.detections_per_img]
+        return {"boxes": boxes[keep], "scores": scores[keep], "labels": labels[keep]}
 
     def detect(self, frame) -> list[Detection]:
         if frame is None:
@@ -111,8 +150,7 @@ class DroneDetector(BaseDetector):
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         tensor = torch.from_numpy(rgb).permute(2, 0, 1)
 
-        with torch.no_grad():
-            output = self._model([self._preprocess(tensor)])[0]
+        output = self._run_model(tensor, width, height)
 
         detections: list[Detection] = []
         for box, score, label in zip(output["boxes"], output["scores"], output["labels"]):

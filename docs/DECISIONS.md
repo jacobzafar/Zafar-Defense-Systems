@@ -924,3 +924,60 @@ Note dut_v1's scores all sit in a narrow ~0.43-0.47 band (entry #18), so
 nearly every one of its ~141 detections per frame clears 0.35 — the FP
 count at the operating threshold is mostly that collapse, not a
 threshold choice.
+
+## 21. Tiled (sliced) inference: big win on medium drones, none on small, 6× slower
+
+**What.** `DroneDetector` gained an opt-in tiled mode (`tile_rows`,
+`tile_cols`, `tile_overlap`, `tile_include_full_frame`; default 1×1 =
+unchanged). The frame is split into overlapping tiles (`detector/tiling.py`),
+every tile — plus, by default, the whole frame — goes through the
+unchanged dut_v1 model in one batch, boxes are mapped back to frame
+coordinates and merged with NMS (0.45), capped at the model's own 300
+detections per frame. No retraining.
+
+**Grid chosen on val500 (never on test)**, dut_v1 weights, 20% overlap:
+
+| Mode | AP@0.5 | Small | Medium | Large | TP / FP @0.35 | FP / frame | ms/frame | FPS |
+|---|---|---|---|---|---|---|---|---|
+| Untiled (ref, #20) | 0.0934 | 0.0023 | 0.0166 | 0.6879 | 165 / 70,731 | 141.5 | 65.0 | 15.39 |
+| 2×2 + full frame | 0.1147 | 0.0030 | 0.1100 | 0.6864 | 250 / 149,750 | 299.5 | 169.8 | 5.89 |
+| **3×3 + full frame** | **0.1497** | 0.0022 | 0.1944 | 0.7068 | 260 / 149,740 | 299.5 | 297.6 | 3.36 |
+| 3×3, tiles only | 0.0956 | 0.0015 | 0.1955 | 0.2997 | 228 / 149,772 | 299.5 | 336.4 | 2.97 |
+| 4×4 + full frame | 0.1560 | 0.0033 | 0.2049 | 0.6853 | 257 / 149,743 | 299.5 | 579.8 | 1.72 |
+
+3×3 + full frame chosen: 4×4 adds only +0.006 AP@0.5 for ~2× the cost.
+The full-frame pass is essential — without it large-drone AP collapses
+(0.69 → 0.30), because tile seams cut large drones into fragments.
+
+**Reported once on the frozen test set** (`eval/config/dut_anti_uav_tiled3x3.yaml`):
+
+| dut_v1 on test | AP@0.5 | AP@[.50:.95] | Small | Medium | Large | Recall@0.35 | TP / FP @0.35 | FP / frame | Precision@0.35 | ms/frame (p95) | FPS |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| Untiled (ref, #20) | 0.1929 | 0.1074 | 0.0016 | 0.0218 | 0.7294 | 0.4548 | 1,021 / 310,970 | 141.3 | 0.00327 | 59.39 (82.53) | 16.84 |
+| 3×3 + full frame | **0.3058** | 0.1758 | 0.0020 | **0.2899** | 0.8049 | 0.6423 | 1,442 / 658,558 | 299.3 | 0.00218 | 355.97 (403.99) | 2.81 |
+
+**Why small does not move — measured, not guessed.** SSDLite's anchor
+generator (inspected on the loaded model) uses scales 0.2-0.95 of the
+input side: the smallest anchor is 64px at 320 input, on a 20×20 feature
+map. A COCO-small (<32²px) drone in a 1920×1080 frame becomes ~5×9px
+after the resize to 320×320 — 7-12× smaller than any anchor it can be
+matched to. 3×3 tiles shrink the frame per crop ~2.6×, so a small drone
+becomes ~14×25px: still far below 64px. A medium (32-96px) drone becomes
+~14-74px — into anchor range — which is exactly the bucket that jumped.
+More tiles show the same: 4×4 still leaves small AP at 0.003.
+
+**False positives.** At the 0.35 operating threshold, FP per frame went
+from ~141 to the 300-detection cap. That is the collapsed classifier
+(#18: every score ~0.43-0.47, so 0.35 filters nothing) meeting ~10× more
+candidate boxes; precision at 0.35 fell 0.0033 → 0.0022. The AP gain is
+nonetheless a real ranking improvement (more TPs ranked among the top
+detections), not just more recall bought with FPs — but at the operating
+point this model is unusable either way until its scores discriminate.
+
+**Decision: kept as an opt-in mode, not the default.** It is the largest
+single accuracy gain so far (+0.11 AP@0.5, medium 13×) at zero training
+cost, so the code stays and is configurable. It is not turned on by
+default because it costs 6× latency (16.8 → 2.8 FPS on this CPU),
+breaking real-time, and doubles FPs at the operating threshold. It is
+the right tool for an offline/forensic pass or a GPU deployment, and
+worth re-measuring once a retrained model's scores discriminate.
