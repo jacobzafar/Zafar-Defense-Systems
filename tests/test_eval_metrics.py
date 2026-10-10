@@ -11,8 +11,11 @@ from eval.metrics import (
     FrameEvalData,
     PredBox,
     compute_ap50,
+    compute_ap50_95,
+    compute_ap_by_size,
     compute_false_alarm_rate,
     compute_latency_stats,
+    compute_recall_at_threshold,
     compute_small_object_recall,
     compute_track_continuity,
     iou,
@@ -76,6 +79,58 @@ def test_ap50_ranks_low_confidence_detections_instead_of_cutting_them_off():
 
     assert abs(compute_ap50(all_detections) - 0.8333333333) < 1e-6
     assert abs(compute_ap50(cut_off_at_035) - 0.5) < 1e-9
+
+
+def test_ap50_95_averages_over_iou_thresholds_hand_computed():
+    # One GT, one prediction with IoU 0.87 (10x10 GT, 10x8.7 prediction
+    # inside it). It is a TP at IoU thresholds 0.50..0.85 (8 of the 10)
+    # and a miss at 0.90 and 0.95, so AP = (8*1.0 + 2*0.0) / 10 = 0.8.
+    gt = EvalBox(x1=0, y1=0, x2=10, y2=10, category="drone")
+    pred = PredBox(x1=0, y1=0, x2=10, y2=8.7, confidence=0.9)
+    frame = FrameEvalData(frame_id="f1", gt_boxes=[gt], pred_boxes=[pred])
+    assert abs(compute_ap50_95([frame]) - 0.8) < 1e-9
+
+
+def _mixed_size_frame():
+    small_gt = EvalBox(x1=0, y1=0, x2=10, y2=10, category="drone")  # area 100 -> small
+    large_gt = EvalBox(x1=200, y1=200, x2=300, y2=300, category="drone")  # area 10000 -> large
+    preds = [
+        PredBox(200, 200, 300, 300, 0.9),  # TP on the large GT
+        PredBox(50, 50, 55, 55, 0.8),  # FP, area 25 (small)
+        PredBox(0, 0, 10, 10, 0.7),  # TP on the small GT
+    ]
+    return FrameEvalData(frame_id="f1", gt_boxes=[small_gt, large_gt], pred_boxes=preds)
+
+
+def test_ap_by_size_hand_computed_with_coco_ignore_rules():
+    # small: the large GT is ignored, so the 0.9 prediction (matched to it)
+    #   is ignored. Remaining ranking: FP (0.8), TP (0.7) on 1 small GT ->
+    #   recalls=[0,1], precisions=[0,0.5], envelope=[0.5,0.5] -> AP = 0.5.
+    # large: the small GT is ignored; the 0.7 prediction (matched to it) is
+    #   ignored, and the unmatched 0.8 FP has area 25 (outside the large
+    #   range) so it is ignored too. Remaining: TP (0.9) -> AP = 1.0.
+    # medium: no GT boxes -> not measurable (None), not 0.0.
+    frame = _mixed_size_frame()
+    by_size = compute_ap_by_size([frame])
+
+    assert by_size["small"]["num_gt_boxes"] == 1
+    assert abs(by_size["small"]["ap"] - 0.5) < 1e-9
+    assert by_size["large"]["num_gt_boxes"] == 1
+    assert by_size["large"]["ap"] == 1.0
+    assert by_size["medium"] == {"ap": None, "num_gt_boxes": 0, "area_range_px": [1024.0, 9216.0]}
+    # Overall AP@0.5 over the same frame: TP, FP, TP on 2 GT -> 0.8333.
+    assert abs(compute_ap50([frame]) - 0.8333333333) < 1e-6
+
+
+def test_recall_at_operating_threshold_is_separate_from_ap():
+    # At conf >= 0.75 only the 0.9 TP and 0.8 FP survive: 1 of 2 GT found.
+    op = compute_recall_at_threshold([_mixed_size_frame()], 0.75)
+    assert op["recall"] == 0.5
+    assert op["precision"] == 0.5
+    assert (op["num_true_positives"], op["num_false_positives"], op["num_gt_boxes"]) == (1, 1, 2)
+
+    no_cutoff = compute_recall_at_threshold([_mixed_size_frame()], None)
+    assert no_cutoff["recall"] == 1.0
 
 
 def test_ap50_is_one_for_a_perfect_detector():

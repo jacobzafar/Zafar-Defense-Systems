@@ -152,3 +152,7 @@ def test_ap_uses_all_detections_while_operating_metrics_use_the_threshold(synthe
     assert built_with["confidence_threshold"] == 0.0
     assert metric_card.ap50 == 1.0  # every GT found, no false positives — was 0.0 with the cutoff inside detect()
     assert metric_card.small_object_recall["num_small_gt_matched"] == 0  # all detections are below 0.35
+    assert metric_card.operating_point["confidence_threshold"] == 0.35
+    assert metric_card.operating_point["recall"] == 0.0
+    assert metric_card.ap50_by_size["small"]["ap"] == 1.0
+    assert metric_card.ap50_by_size["medium"]["ap"] is None

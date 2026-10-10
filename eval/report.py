@@ -13,6 +13,21 @@ def render_report_md(metric_card: "MetricCard", config: "EvalConfig") -> str:
     far = metric_card.false_alarm_rate
     lat = metric_card.latency
     cont = metric_card.track_continuity
+    op = metric_card.operating_point
+    by_size = metric_card.ap50_by_size
+
+    def fmt(value, spec=".4f"):
+        return "n/a" if value is None else format(value, spec)
+
+    op_threshold = "none" if op["confidence_threshold"] is None else f"{op['confidence_threshold']}"
+    size_rows = []
+    for name, bucket in by_size.items():
+        lo, hi = bucket["area_range_px"]
+        range_str = f"{lo:.0f} ≤ area < {hi:.0f} px²" if hi is not None else f"area ≥ {lo:.0f} px²"
+        value = fmt(bucket["ap"]) if bucket["ap"] is not None else "**not measurable** (no GT boxes)"
+        size_rows.append(
+            f"| AP@{config.iou_threshold} — {name} | {value} | {bucket['num_gt_boxes']} GT boxes with {range_str} (COCO size bucket); threshold-independent. |"
+        )
 
     far_str = (
         f"{far['rate_per_frame']:.4f} / frame"
@@ -41,8 +56,12 @@ def render_report_md(metric_card: "MetricCard", config: "EvalConfig") -> str:
         "",
         "| Metric | Value | Definition |",
         "|---|---|---|",
-        f"| AP@{config.iou_threshold} (single-class \"drone\") | {metric_card.ap50:.4f} | Average precision at IoU={config.iou_threshold}, all-point interpolation. |",
-        f"| Small-object recall | {sor['recall']:.4f} ({sor['num_small_gt_matched']}/{sor['num_small_gt_boxes']}) | Recall on GT boxes with area < {sor['area_threshold_px']:.0f}px² (COCO \"small\" convention). |",
+        f"| AP@{config.iou_threshold} (single-class \"drone\") | {metric_card.ap50:.4f} | Threshold-independent: every raw detection ranked by score (no confidence cutoff), all-point interpolated PR integral at IoU={config.iou_threshold}. |",
+        f"| AP@[0.50:0.95] | {metric_card.ap50_95:.4f} | Mean AP over IoU 0.50, 0.55, …, 0.95 (COCO primary metric; all-point interpolation per threshold). |",
+        *size_rows,
+        f"| Recall @ conf ≥ {op_threshold} | {fmt(op['recall'])} ({op['num_true_positives']}/{op['num_gt_boxes']}) | Operating point, separate from AP: fraction of GT boxes matched (IoU ≥ {op['iou_threshold']}) by detections at or above the configured confidence threshold. |",
+        f"| Precision @ conf ≥ {op_threshold} | {fmt(op['precision'])} | {op['num_false_positives']} false positives at that same operating point. |",
+        f"| Small-object recall @ conf ≥ {op_threshold} | {sor['recall']:.4f} ({sor['num_small_gt_matched']}/{sor['num_small_gt_boxes']}) | Operating point: recall on GT boxes with area < {sor['area_threshold_px']:.0f}px² (COCO \"small\" convention). |",
         f"| False-alarm rate | {far_str} | {far['num_false_alarms']} false detections across {far['num_hard_negative_frames']} hard-negative (no-drone) frames. |",
         f"| Latency (mean) | {lat['mean_ms']:.2f} ms | Wall-clock detector.detect() time per frame, this run's hardware only. |",
         f"| Latency (p95) | {lat['p95_ms']:.2f} ms | |",
@@ -75,10 +94,10 @@ def render_report_md(metric_card: "MetricCard", config: "EvalConfig") -> str:
         "measured by this repo — fill it in manually from the source paper/benchmark you",
         "are comparing against, and cite it._",
         "",
-        "| Source | AP@0.5 | Small-object recall | False-alarm rate | FPS | Notes |",
-        "|---|---|---|---|---|---|",
-        "| _(paste published baseline here)_ | | | | | |",
-        f"| This run (`{metric_card.detector_backend}`) | {metric_card.ap50:.4f} | {sor['recall']:.4f} | "
+        "| Source | AP@0.5 | AP@[0.50:0.95] | Small-object recall | False-alarm rate | FPS | Notes |",
+        "|---|---|---|---|---|---|---|",
+        "| _(paste published baseline here)_ | | | | | | |",
+        f"| This run (`{metric_card.detector_backend}`) | {metric_card.ap50:.4f} | {metric_card.ap50_95:.4f} | {sor['recall']:.4f} | "
         f"{far_str if far['measurable'] else 'not measurable'} | {lat['fps']:.2f} | |",
         "",
     ]

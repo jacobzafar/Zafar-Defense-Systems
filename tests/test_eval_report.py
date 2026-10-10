@@ -20,6 +20,21 @@ def _base_metric_card(**overrides) -> MetricCard:
         num_sequences=3,
         num_frames=3,
         ap50=0.5,
+        ap50_95=0.25,
+        ap50_by_size={
+            "small": {"ap": 0.4, "num_gt_boxes": 2, "area_range_px": [0.0, 1024.0]},
+            "medium": {"ap": 0.6, "num_gt_boxes": 1, "area_range_px": [1024.0, 9216.0]},
+            "large": {"ap": 0.8, "num_gt_boxes": 1, "area_range_px": [9216.0, None]},
+        },
+        operating_point={
+            "confidence_threshold": 0.35,
+            "iou_threshold": 0.5,
+            "recall": 0.6667,
+            "precision": 0.5,
+            "num_gt_boxes": 3,
+            "num_true_positives": 2,
+            "num_false_positives": 2,
+        },
         small_object_recall={"recall": 0.5, "num_small_gt_matched": 1, "num_small_gt_boxes": 2, "area_threshold_px": 1024.0},
         false_alarm_rate={
             "measurable": False,
@@ -92,3 +107,14 @@ def test_measurable_metrics_still_render_numeric_values_and_a_per_sequence_table
     assert "0.9000" in report
     assert "not measurable" not in report
     assert "| seq_001 | 1 | 10 | 0.9000 |" in report
+
+
+def test_report_renders_threshold_independent_ap_separately_from_the_operating_point():
+    by_size = dict(_base_metric_card().ap50_by_size)
+    by_size["large"] = {"ap": None, "num_gt_boxes": 0, "area_range_px": [9216.0, None]}
+    report = render_report_md(_base_metric_card(ap50_by_size=by_size), _config())
+
+    assert "AP@[0.50:0.95] | 0.2500" in report
+    assert "AP@0.5 — small | 0.4000" in report
+    assert "AP@0.5 — large | **not measurable** (no GT boxes)" in report
+    assert "Recall @ conf ≥ 0.35 | 0.6667 (2/3)" in report

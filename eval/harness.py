@@ -1,8 +1,10 @@
 """Frozen evaluation harness.
 
 Runs a chosen detector (and, for track continuity, a tracker) over a
-held-out, config-declared eval set and produces a `MetricCard`: AP@0.5,
-small-object recall, false-alarm rate, latency, and track continuity —
+held-out, config-declared eval set and produces a `MetricCard`:
+threshold-independent AP@0.5, AP@[0.50:0.95] and AP@0.5 by object size;
+recall/precision and small-object recall at the operating confidence
+threshold; false-alarm rate, latency, and track continuity —
 see eval/metrics.py for exact metric definitions.
 
 This harness never modifies the eval set and never trains anything. If
@@ -35,8 +37,11 @@ from eval.metrics import (  # noqa: E402
     FrameEvalData,
     PredBox,
     compute_ap50,
+    compute_ap50_95,
+    compute_ap_by_size,
     compute_false_alarm_rate,
     compute_latency_stats,
+    compute_recall_at_threshold,
     compute_small_object_recall,
     compute_track_continuity,
 )
@@ -85,6 +90,9 @@ class MetricCard:
     num_sequences: int
     num_frames: int
     ap50: float
+    ap50_95: float
+    ap50_by_size: dict[str, dict[str, Any]]
+    operating_point: dict[str, Any]
     small_object_recall: dict[str, Any]
     false_alarm_rate: dict[str, Any]
     latency: dict[str, float]
@@ -181,6 +189,11 @@ def run_evaluation(config: EvalConfig) -> MetricCard:
     ]
 
     ap50 = compute_ap50(all_frame_eval_data, iou_threshold=config.iou_threshold)
+    ap50_95 = compute_ap50_95(all_frame_eval_data)
+    ap50_by_size = compute_ap_by_size(all_frame_eval_data, iou_threshold=config.iou_threshold)
+    operating_point = compute_recall_at_threshold(
+        all_frame_eval_data, operating_threshold, iou_threshold=config.iou_threshold
+    )
     small_object_recall = compute_small_object_recall(
         operating_frames, small_area_threshold_px=config.small_object_area_px, iou_threshold=config.iou_threshold
     )
@@ -197,6 +210,9 @@ def run_evaluation(config: EvalConfig) -> MetricCard:
         num_sequences=len(sequences),
         num_frames=len(all_frame_eval_data),
         ap50=ap50,
+        ap50_95=ap50_95,
+        ap50_by_size=ap50_by_size,
+        operating_point=operating_point,
         small_object_recall=small_object_recall,
         false_alarm_rate=false_alarm_rate,
         latency=latency,

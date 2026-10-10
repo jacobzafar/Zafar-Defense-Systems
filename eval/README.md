@@ -1,10 +1,13 @@
 # Frozen evaluation harness
 
 This is the **only** place in this repo that produces accuracy metrics
-(AP@0.5, small-object recall, false-alarm rate, latency, track
-continuity) for a detector backend. `detector/train.py`'s own
-`training_report.json` deliberately does not compute any of these — see
-`docs/DECISIONS.md` entry #9.
+on the frozen test set (threshold-independent AP@0.5, AP@[0.50:0.95],
+AP@0.5 by COCO object size; recall/precision and small-object recall at
+the operating confidence threshold; false-alarm rate, latency, track
+continuity) for a detector backend — see `eval/metrics.py` for exact
+definitions. `detector/train.py`'s `training_report.json` only adds a
+quick per-epoch AP@0.5 on a separate val split as a training diagnostic,
+never on this test set — see `docs/DECISIONS.md` entries #9 and #19.
 
 ## The eval set must be frozen
 

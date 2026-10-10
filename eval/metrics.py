@@ -14,6 +14,14 @@ Metric definitions (fixed here so results are comparable run to run):
   Threshold-independent: callers must pass *every* detection the model
   emits (no confidence cutoff) — a cutoff truncates the PR curve and can
   only lower AP. eval/harness.py does this; see docs/DECISIONS.md #19.
+- **AP@[0.50:0.95]**: mean of the above over IoU 0.50, 0.55, ..., 0.95
+  (COCO's primary metric; all-point interpolation per threshold).
+- **AP@0.5 by size**: the above restricted to COCO's small (<32²px),
+  medium (32²-96²px) and large (>=96²px) GT boxes, with COCO's ignore
+  rules for out-of-range boxes and predictions (see compute_ap).
+- **Recall/precision at the operating threshold**: at the detector
+  config's `confidence_threshold` — a deployment operating point,
+  reported separately from (never instead of) the threshold-independent AP.
 - **Small-object recall**: recall restricted to ground-truth boxes with
   pixel area below `small_area_threshold_px` (default 1024 = 32x32,
   COCO's own "small object" convention), at a fixed confidence threshold
@@ -81,62 +89,180 @@ class FrameEvalData:
     pred_boxes: list[PredBox] = field(default_factory=list)
 
 
-def compute_ap50(frames: list[FrameEvalData], iou_threshold: float = 0.5) -> float:
-    """Single-class AP at the given IoU threshold (default 0.5).
+# COCO's object-size buckets, in pixel area of the box in the original
+# image. Half-open [lo, hi) so "small" matches compute_small_object_recall
+# and the DUT converter's own `area < 1024` small-instance count exactly.
+COCO_AREA_RANGES: dict[str, tuple[float, float]] = {
+    "small": (0.0, 32.0**2),
+    "medium": (32.0**2, 96.0**2),
+    "large": (96.0**2, float("inf")),
+}
 
-    Returns 0.0 if there are no ground-truth boxes at all across `frames`
-    (AP is undefined in that case; 0.0 is a safe, JSON-serializable
-    default rather than NaN).
+AP50_95_IOU_THRESHOLDS = tuple(round(0.5 + 0.05 * i, 2) for i in range(10))
+
+
+def _box_area(box: Any) -> float:
+    return max(0.0, box.x2 - box.x1) * max(0.0, box.y2 - box.y1)
+
+
+def _iou_matrix(preds: list[PredBox], gts: list[EvalBox]) -> np.ndarray:
+    if not preds or not gts:
+        return np.zeros((len(preds), len(gts)))
+    p = np.array([[b.x1, b.y1, b.x2, b.y2] for b in preds], dtype=float)
+    g = np.array([[b.x1, b.y1, b.x2, b.y2] for b in gts], dtype=float)
+    inter_w = np.clip(np.minimum(p[:, None, 2], g[None, :, 2]) - np.maximum(p[:, None, 0], g[None, :, 0]), 0, None)
+    inter_h = np.clip(np.minimum(p[:, None, 3], g[None, :, 3]) - np.maximum(p[:, None, 1], g[None, :, 1]), 0, None)
+    inter = inter_w * inter_h
+    area_p = np.clip(p[:, 2] - p[:, 0], 0, None) * np.clip(p[:, 3] - p[:, 1], 0, None)
+    area_g = np.clip(g[:, 2] - g[:, 0], 0, None) * np.clip(g[:, 3] - g[:, 1], 0, None)
+    union = area_p[:, None] + area_g[None, :] - inter
+    return np.where((inter > 0) & (union > 0), inter / np.where(union > 0, union, 1.0), 0.0)
+
+
+def compute_ap(
+    frames: list[FrameEvalData],
+    iou_threshold: float = 0.5,
+    area_range: tuple[float, float] | None = None,
+) -> float:
+    """Single-class, threshold-independent AP at one IoU threshold.
+
+    Every prediction in `frames` is ranked by confidence (no cutoff — pass
+    them all) and the full PR curve is integrated with all-point
+    interpolation of the backward-max precision envelope. Each prediction
+    is greedily matched, in descending-score order, to the unmatched GT
+    box in its frame with the highest IoU >= `iou_threshold`.
+
+    `area_range=(lo, hi)` restricts evaluation to GT boxes with
+    lo <= area < hi using COCO's ignore rules: out-of-range GT boxes don't
+    count toward recall, a prediction matched to one is ignored (neither
+    TP nor FP), and an unmatched prediction whose own area is out of range
+    is ignored. Matching prefers in-range GT boxes over ignored ones.
+
+    Returns 0.0 if there are no (in-range) GT boxes at all — AP is
+    undefined there; 0.0 is a JSON-safe default rather than NaN. Callers
+    that need to tell "undefined" from "measured zero" (e.g.
+    compute_ap_by_size) check the GT count themselves.
     """
-    total_gt = sum(len(f.gt_boxes) for f in frames)
+    lo, hi = area_range if area_range is not None else (-float("inf"), float("inf"))
+
+    def in_range(box: Any) -> bool:
+        return lo <= _box_area(box) < hi
+
+    scores: list[float] = []
+    outcomes: list[int] = []  # 1 = TP, 0 = FP, -1 = ignored
+    total_gt = 0
+
+    for frame in frames:
+        gt_in_range = np.array([in_range(gt) for gt in frame.gt_boxes], dtype=bool)
+        total_gt += int(gt_in_range.sum())
+        if not frame.pred_boxes:
+            continue
+
+        order = sorted(range(len(frame.pred_boxes)), key=lambda i: frame.pred_boxes[i].confidence, reverse=True)
+        preds = [frame.pred_boxes[i] for i in order]
+        ious = _iou_matrix(preds, frame.gt_boxes)
+        gt_matched = np.zeros(len(frame.gt_boxes), dtype=bool)
+
+        for row, pred in enumerate(preds):
+            outcome = None
+            for want_in_range in (True, False):
+                candidates = (~gt_matched) & (gt_in_range == want_in_range) & (ious[row] >= iou_threshold)
+                if candidates.any():
+                    best = int(np.argmax(np.where(candidates, ious[row], -1.0)))
+                    gt_matched[best] = True
+                    outcome = 1 if want_in_range else -1
+                    break
+            if outcome is None:
+                outcome = 0 if in_range(pred) else -1
+            scores.append(pred.confidence)
+            outcomes.append(outcome)
+
     if total_gt == 0:
         return 0.0
 
-    gt_matched: dict[str, list[bool]] = {f.frame_id: [False] * len(f.gt_boxes) for f in frames}
-    gt_by_frame: dict[str, list[EvalBox]] = {f.frame_id: f.gt_boxes for f in frames}
+    scores_arr = np.asarray(scores, dtype=float)
+    outcomes_arr = np.asarray(outcomes, dtype=int)
+    keep = outcomes_arr >= 0
+    scores_arr, outcomes_arr = scores_arr[keep], outcomes_arr[keep]
+    if len(scores_arr) == 0:
+        return 0.0
 
-    all_preds: list[tuple[float, str, PredBox]] = [
-        (pred.confidence, f.frame_id, pred) for f in frames for pred in f.pred_boxes
-    ]
-    all_preds.sort(key=lambda item: item[0], reverse=True)
-
-    tps = np.zeros(len(all_preds))
-    fps = np.zeros(len(all_preds))
-
-    for i, (_confidence, frame_id, pred) in enumerate(all_preds):
-        gts = gt_by_frame[frame_id]
-        matched = gt_matched[frame_id]
-        best_iou = 0.0
-        best_idx = -1
-        for idx, gt in enumerate(gts):
-            if matched[idx]:
-                continue
-            score = iou(pred, gt)
-            if score > best_iou:
-                best_iou = score
-                best_idx = idx
-        if best_idx >= 0 and best_iou >= iou_threshold:
-            matched[best_idx] = True
-            tps[i] = 1
-        else:
-            fps[i] = 1
+    # Stable sort: ties keep frame order, matching the original implementation.
+    global_order = np.argsort(-scores_arr, kind="stable")
+    tps = (outcomes_arr[global_order] == 1).astype(float)
+    fps = 1.0 - tps
 
     cum_tp = np.cumsum(tps)
     cum_fp = np.cumsum(fps)
     recalls = cum_tp / total_gt
     precisions = cum_tp / np.maximum(cum_tp + cum_fp, 1e-9)
+    envelope = np.maximum.accumulate(precisions[::-1])[::-1]
+    recall_steps = np.diff(np.concatenate(([0.0], recalls)))
+    return float(np.sum(recall_steps * envelope))
 
-    envelope = precisions.copy()
-    for i in range(len(envelope) - 2, -1, -1):
-        envelope[i] = max(envelope[i], envelope[i + 1])
 
-    ap = 0.0
-    prev_recall = 0.0
-    for i in range(len(recalls)):
-        ap += (recalls[i] - prev_recall) * envelope[i]
-        prev_recall = recalls[i]
+def compute_ap50(frames: list[FrameEvalData], iou_threshold: float = 0.5) -> float:
+    """Single-class AP at the given IoU threshold (default 0.5) — see compute_ap."""
+    return compute_ap(frames, iou_threshold=iou_threshold)
 
-    return float(ap)
+
+def compute_ap50_95(frames: list[FrameEvalData]) -> float:
+    """COCO-style AP@[0.50:0.95]: mean of compute_ap over IoU thresholds
+    0.50, 0.55, ..., 0.95. (All-point interpolation per threshold, not
+    pycocotools' 101-point sampling — values can differ slightly from
+    pycocotools in the third decimal.)"""
+    return float(np.mean([compute_ap(frames, iou_threshold=t) for t in AP50_95_IOU_THRESHOLDS]))
+
+
+def compute_ap_by_size(frames: list[FrameEvalData], iou_threshold: float = 0.5) -> dict[str, dict[str, Any]]:
+    """AP per COCO size bucket (small/medium/large, see COCO_AREA_RANGES).
+    `ap` is None (not 0.0) for a bucket with no GT boxes — unmeasurable,
+    not measured-as-zero."""
+    result: dict[str, dict[str, Any]] = {}
+    for name, (lo, hi) in COCO_AREA_RANGES.items():
+        num_gt = sum(1 for f in frames for gt in f.gt_boxes if lo <= _box_area(gt) < hi)
+        result[name] = {
+            "ap": compute_ap(frames, iou_threshold=iou_threshold, area_range=(lo, hi)) if num_gt else None,
+            "num_gt_boxes": num_gt,
+            "area_range_px": [lo, hi if hi != float("inf") else None],
+        }
+    return result
+
+
+def compute_recall_at_threshold(
+    frames: list[FrameEvalData], confidence_threshold: float | None, iou_threshold: float = 0.5
+) -> dict[str, Any]:
+    """Recall and precision at a fixed operating confidence threshold —
+    what a deployed detector actually reports — kept separate from the
+    threshold-independent AP. `confidence_threshold=None` means no cutoff
+    (e.g. a backend without a confidence score threshold)."""
+    total_gt = 0
+    tp = 0
+    fp = 0
+    for frame in frames:
+        total_gt += len(frame.gt_boxes)
+        preds = [
+            p for p in frame.pred_boxes if confidence_threshold is None or p.confidence >= confidence_threshold
+        ]
+        preds.sort(key=lambda p: p.confidence, reverse=True)
+        ious = _iou_matrix(preds, frame.gt_boxes)
+        gt_matched = np.zeros(len(frame.gt_boxes), dtype=bool)
+        for row in range(len(preds)):
+            candidates = (~gt_matched) & (ious[row] >= iou_threshold)
+            if candidates.any():
+                gt_matched[int(np.argmax(np.where(candidates, ious[row], -1.0)))] = True
+                tp += 1
+            else:
+                fp += 1
+    return {
+        "confidence_threshold": confidence_threshold,
+        "iou_threshold": iou_threshold,
+        "recall": (tp / total_gt) if total_gt else None,
+        "precision": (tp / (tp + fp)) if (tp + fp) else None,
+        "num_gt_boxes": total_gt,
+        "num_true_positives": tp,
+        "num_false_positives": fp,
+    }
 
 
 def compute_small_object_recall(
