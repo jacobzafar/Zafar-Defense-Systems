@@ -1,0 +1,30 @@
+# detector/train.py config for the longer, resumable DUT Anti-UAV
+# fine-tuning run that follows up docs/DECISIONS.md entry #18 (the
+# dut_v1 model's classification head collapsed to a near-constant
+# ~0.43-0.45 score — undertrained after only 2 epochs).
+#
+# Same data/split/seed/learning rate as config/dut_train.yaml so the two
+# runs stay comparable; differences, and why:
+#
+# - output_dir: models/dut_v2 — leaves the dut_v1 weights untouched.
+#   checkpoint.pt is written here after every epoch and the run resumes
+#   from it when re-launched. On Colab, override this to a mounted Google
+#   Drive path, or the checkpoint disappears with the VM.
+# - epochs: 20 — a chosen budget, not a tuned value. Since the run is
+#   resumable, raising it later continues from the last checkpoint.
+# - device: auto — CUDA if available, else CPU.
+# - val_dataset_dir: DUT's own official val split, evaluated after every
+#   epoch (AP@0.5 + raw-score min/max/spread), on a fixed seeded subset
+#   of 500 of its 2600 images to keep per-epoch evaluation quick.
+dataset_dir: data/dut-anti-uav/converted/train
+output_dir: models/dut_v2
+target_class: drone
+val_fraction: 0.0
+epochs: 20
+batch_size: 8
+learning_rate: 0.001
+seed: 42
+device: auto
+dataset_name: dut-anti-uav
+val_dataset_dir: data/dut-anti-uav/converted/val
+val_max_images: 500

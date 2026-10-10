@@ -7,6 +7,7 @@ never be read as one — see the "note" field in the report itself and
 eval/ for the frozen evaluation harness that produces real metrics.
 """
 
+import json
 import sys
 import textwrap
 from pathlib import Path
@@ -186,4 +187,117 @@ def test_train_raises_clearly_on_empty_dataset(tmp_path):
 
     config = TrainConfig(dataset_dir=str(dataset_dir), output_dir=str(tmp_path / "out"))
     with pytest.raises(ValueError, match="No images found"):
+        train(config)
+
+
+def test_device_auto_resolves_to_cuda_only_when_available(monkeypatch):
+    import torch
+
+    from detector.train import resolve_device
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    assert resolve_device("auto") == "cpu"
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    assert resolve_device("auto") == "cuda"
+    assert resolve_device("cpu") == "cpu"  # explicit config value overrides auto-detection
+
+
+def test_checkpoint_written_every_epoch_and_interrupted_run_resumes(synthetic_drone_dataset, tmp_path, monkeypatch):
+    """Simulates a Colab disconnect: a 2-epoch run is killed during epoch 2.
+    Re-running the same config must resume from the epoch-1 checkpoint
+    (not restart), and end with exactly the same per-epoch losses and
+    weights as a run that was never interrupted."""
+    import torch
+
+    import detector.train as train_module
+
+    def make_config(output_dir):
+        return TrainConfig(
+            dataset_dir=str(synthetic_drone_dataset),
+            output_dir=str(output_dir),
+            epochs=2,
+            batch_size=2,
+            val_fraction=0.2,
+            seed=42,
+            val_dataset_dir=str(synthetic_drone_dataset),
+            val_max_images=3,
+        )
+
+    uninterrupted = train(make_config(tmp_path / "uninterrupted"))
+
+    interrupted_dir = tmp_path / "interrupted"
+    real_evaluate = train_module.evaluate_on_val
+    calls = {"n": 0}
+
+    def evaluate_then_disconnect_on_epoch_2(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise KeyboardInterrupt("simulated Colab disconnect")
+        return real_evaluate(*args, **kwargs)
+
+    monkeypatch.setattr(train_module, "evaluate_on_val", evaluate_then_disconnect_on_epoch_2)
+    with pytest.raises(KeyboardInterrupt):
+        train(make_config(interrupted_dir))
+    monkeypatch.setattr(train_module, "evaluate_on_val", real_evaluate)
+
+    checkpoint = torch.load(interrupted_dir / "checkpoint.pt", weights_only=False)
+    assert checkpoint["epoch"] == 1
+    assert {"model_state", "optimizer_state"} <= set(checkpoint)
+    assert not (interrupted_dir / "weights.pt").exists()
+    partial_report = json.loads((interrupted_dir / "training_report.json").read_text())
+    assert partial_report["status"] == "in_progress"
+    assert partial_report["epochs_completed"] == 1
+
+    resumed = train(make_config(interrupted_dir))
+
+    assert resumed["resumed_from_epoch"] == 1
+    assert resumed["status"] == "complete"
+    assert resumed["epoch_losses"] == uninterrupted["epoch_losses"]
+    assert [v["epoch"] for v in resumed["val_per_epoch"]] == [1, 2]
+    assert resumed["val_per_epoch"] == uninterrupted["val_per_epoch"]
+    resumed_weights = torch.load(interrupted_dir / "weights.pt")
+    uninterrupted_weights = torch.load(tmp_path / "uninterrupted" / "weights.pt")
+    for key, value in uninterrupted_weights.items():
+        assert torch.equal(resumed_weights[key], value), key
+
+
+def test_val_metrics_report_ap_and_raw_score_spread(synthetic_drone_dataset, tmp_path):
+    config = TrainConfig(
+        dataset_dir=str(synthetic_drone_dataset),
+        output_dir=str(tmp_path / "out"),
+        epochs=1,
+        batch_size=2,
+        val_dataset_dir=str(synthetic_drone_dataset),
+    )
+    report = train(config)
+
+    (val,) = report["val_per_epoch"]
+    assert val["epoch"] == 1
+    assert val["num_val_images"] == 6
+    assert 0.0 <= val["ap50"] <= 1.0
+    assert val["num_raw_scores"] > 0
+    assert val["raw_score_min"] <= val["raw_score_max"]
+    assert val["raw_score_spread"] == pytest.approx(val["raw_score_max"] - val["raw_score_min"], abs=1e-5)
+
+
+def test_resume_refuses_a_checkpoint_from_different_settings(synthetic_drone_dataset, tmp_path):
+    output_dir = tmp_path / "out"
+    base = dict(dataset_dir=str(synthetic_drone_dataset), output_dir=str(output_dir), epochs=1, batch_size=2)
+    train(TrainConfig(**base))
+
+    with pytest.raises(ValueError, match="different settings"):
+        train(TrainConfig(**{**base, "epochs": 2, "learning_rate": 0.01}))
+
+
+def test_val_dataset_dir_refuses_the_frozen_test_set(synthetic_drone_dataset, tmp_path):
+    frozen_eval_set_dir = tmp_path / "frozen_eval"
+    build_frozen_eval_set(synthetic_drone_dataset, frozen_eval_set_dir)
+
+    config = TrainConfig(
+        dataset_dir=str(synthetic_drone_dataset),
+        output_dir=str(tmp_path / "out"),
+        epochs=1,
+        val_dataset_dir=str(frozen_eval_set_dir),
+    )
+    with pytest.raises(EvalSetFrozenError):
         train(config)
