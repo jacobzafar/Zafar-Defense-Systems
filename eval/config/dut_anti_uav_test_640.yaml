@@ -1,3 +1,7 @@
+# STATUS: PREPARED, NOT RUN — needs a GPU (none in the environment this was
+# written in). No results from this config exist yet; the small-object work
+# is locked at docs/DECISIONS.md #24 / eval/REPORT.md "Summary".
+#
 # eval/harness.py config: the frozen DUT *test* set, for the single
 # checkpoint of config/dut_train_640.yaml chosen on val500 by
 # eval/select_checkpoint.py. Copy that chosen weights_epoch_NNN.pt to

@@ -1089,3 +1089,35 @@ measurement says can let small-drone AP move at all, and it keeps the
 real-time architecture. If B's small/medium AP on val stays far below
 the baselines, move to D rather than tuning SSDLite further. Decision is
 yours; nothing here is implemented.
+
+## 24. Small-object detection work locked here, by decision
+
+**Decision (project owner, 2026-10-10):** do not build the stride-8 /
+FPN architecture now. The detection work stops at a documented,
+reproducible state; the plain-language and technical summary is the
+"Summary" section at the top of `eval/REPORT.md`.
+
+**State as locked:**
+- Shipped and measured: threshold-independent evaluation (#19), richer
+  per-size metrics (#19-#20), opt-in tiled inference (#21; `tile_rows`/
+  `tile_cols` default 1, i.e. off — enabled only by
+  `eval/config/dut_anti_uav_tiled3x3.yaml`). Frozen DUT test AP@0.5:
+  0.1929 standard, 0.3058 tiled (large 0.8049 / medium 0.2899 / small
+  0.0020), 16.8 vs. 2.8 FPS on CPU.
+- Prepared, not run (needs GPU): configurable `input_size` and the
+  640 / 320-control training pair (#22). Each config carries a
+  "PREPARED, NOT RUN" header.
+- Recommendation recorded, not implemented: #23's options A-D.
+
+**Why stop here rather than push on:** #23 measured that small drones
+are not matchable by this architecture's anchors at all, so further
+tuning of SSDLite (epochs, learning rate, input size) cannot be expected
+to move small-drone AP. The two levers that can are deferred
+deliberately: (a) the project's own FPV footage, which defines what
+"small" actually means for the product — its size distribution should be
+put through #23's anchor-coverage check first; and (b) only if that
+shows small targets still matter, a stride-8 or FPN architecture.
+Precisely what was measured for the "0% matchable" claim: stock anchors
+at 320 and 640 input, and 3×3 tiling (simulated) — not every possible
+tile count; sufficiently fine tiling would eventually enlarge small
+drones into anchor range, at a latency cost already prohibitive at 3×3.

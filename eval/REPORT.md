@@ -9,6 +9,76 @@
 
 **This eval set is frozen and must never be used for training** — see eval/README.md.
 
+## Summary: where the detection work stands (locked 2026-10-10)
+
+This section is the self-contained read for someone who did not write
+this code. Everything below it is the supporting detail; the full
+reasoning is in `docs/DECISIONS.md` entries #19-#24.
+
+**What was evaluated.** A single-class "drone" detector — SSDLite
+(MobileNetV3 backbone, COCO-pretrained), fine-tuned for 2 epochs on DUT
+Anti-UAV's 5,200-image train split (`models/dut_v1`) — on that dataset's
+frozen 2,200-image test split (2,245 drones). The test set has never been
+used to train or to choose any setting; settings were chosen on a
+separate 500-image validation subset.
+
+**1. Accuracy (threshold-independent AP@0.5, frozen test set, no retraining):**
+
+| | AP@0.5 | Large (≥96²px) | Medium (32²-96²px) | Small (<32²px) | Speed (4-core CPU) |
+|---|---|---|---|---|---|
+| Standard inference | 0.19 (0.1929) | 0.73 | 0.02 | 0.002 | 59 ms/frame, 16.8 FPS |
+| 3×3 tiled inference (opt-in) | **0.31 (0.3058)** | **0.80** | **0.29** | **0.002** | 356 ms/frame, 2.8 FPS |
+| Published baselines, same split (Zhao et al. 2022) | 0.40-0.68 | not reported | not reported | not reported | GPU, not comparable |
+
+AP here is computed over every raw detection, ranked by score — an
+earlier version applied the 0.35 confidence cutoff first, which can only
+understate AP; that bug was found and fixed (#19). Tiling splits each
+frame into 9 overlapping crops plus the whole frame and merges the
+results; it needs no retraining (#21). The tiled mode exists in code but
+is **off by default**.
+
+**2. Root cause of the small-drone gap — an architecture floor, not a
+tuning problem (#21, #23).** SSDLite's smallest anchor box (the template
+sizes the model can match an object to) is fixed at 0.2 of the input
+side: 64px at the standard 320×320 input. A small drone in a 1920×1080
+frame shrinks to roughly 5×9px at that input. Measured on all 5,243 drone
+boxes in the *train* split: **0% of small drones (and 0.7% of medium) have
+any anchor they overlap at IoU ≥ 0.5** — the threshold the training
+matcher uses — so the model never gets a usable training target for
+them. This holds at 320 and at 640 input (anchors scale with the input),
+and with 3×3 tiling (simulated). A stride-8 feature map with 16px anchors
+at 640 input would make ~24% of small and ~75% of medium drones matchable
+(simulated with torchvision's own anchor generator). It is consistent
+with training longer barely helping — dut_v2 (20 epochs) sat at ~0.09-0.10
+validation AP@0.5 for most epochs (best single epoch 0.128) vs. dut_v1's
+0.093 on the same images; dut_v2's figures come from the Colab run's log
+under the old cutoff, not re-measured here — and with tiling helping
+medium drones (which it pushes into anchor range) but not small ones.
+
+**3. Not deployable at the operating point yet.** At the 0.35 confidence
+threshold the model's scores are collapsed into a narrow ~0.43-0.47 band
+(#18), so the threshold filters almost nothing: ~141 false positives per
+frame untiled, ~300 (the per-frame cap) tiled; precision 0.003 / 0.002.
+Tiling improves *ranking* — which is what AP measures — but not the
+operating point, and it drops the CPU frame rate from ~16.8 to ~2.8 FPS.
+False-alarm rate on drone-free frames and track continuity remain
+unmeasurable: DUT's test split has no drone-free images and no video
+sequences.
+
+**4. What is ready but not run.** Configurable input size and a matched
+640 vs. 320 training pair (`config/dut_train_640.yaml`,
+`config/dut_train_320_control.yaml`, #22) — prepared, not run, needs a
+GPU. Per the anchor analysis, 640 alone is not expected to fix small
+drones.
+
+**5. Next levers — both deferred by choice, not abandoned:**
+(a) **the project's own FPV footage** — the data the product actually has
+to work on; its drone-size distribution should be measured with the same
+anchor-coverage check (#23) before choosing a model change, since it
+decides whether the small-object floor even matters for it;
+(b) **if still needed then, a stride-8 or FPN-based architecture**
+(#23 options B and D, est. ~1-2 and ~3-5 days plus GPU training).
+
 ## Metric card
 
 | Metric | Value | Definition |
@@ -203,13 +273,15 @@ caveats, stated rather than glossed over:
 | YOLOX-ResNet18 (paper, Table II, fastest) | 0.400 | TODO | TODO | 53.7 | Fastest detector in the paper's own benchmark. |
 | This run (`drone_v1`, 2 epochs, CPU, lr=0.001, nms=0.45) | 0.1929 (AP@[.50:.95] 0.1074) | 0.2300 | not measurable | 16.12 | Corrected AP (#19); FPS from the clean #18 run. |
 | lr=0.0005 comparison (2 epochs, CPU, nms=0.45) | 0.1613 (AP@[.50:.95] 0.0874) | 0.1297 | not measurable | 17.45 | Worse, not better — see entry #18. Corrected AP (#19). |
+| This run, 3×3 tiled inference (same weights, opt-in) | 0.3058 (AP@[.50:.95] 0.1758) | 0.3809 (323/848) | not measurable | 2.81 | #21. Small-object *recall* rises at 0.35, but small AP stays 0.002 — recall bought among ~300 FP/frame. |
 
-**Read on this result, updated:** still well below every published
-baseline, and still, honestly, "proof the pipeline works end-to-end, not
-a working detector" — but that phrase now rests on a specific, verified
-mechanism (a collapsed classification head, evidenced directly) and two
-ruled-out alternative explanations (NMS, this specific LR change), not
-just "2 epochs is probably not enough." The single clearest next step
-remains what §6 of `docs/STATUS.md` already said before this pass: train
-longer. This pass adds the evidence for *why* that's the right call
-rather than a guess.
+**Read on this result (locked 2026-10-10):** still below every
+published baseline. The earlier read here — "train longer" — has been
+tested and superseded: a 20-epoch run was roughly level with the 2-epoch
+model on validation for most epochs (best epoch 0.128 vs. 0.093), and the
+anchor analysis (#23) shows why — small drones have
+no matchable anchor in this architecture, so more epochs cannot teach
+them. Tiling closes part of the gap (0.19 → 0.31) without retraining.
+The remaining gap is architectural for small drones and a collapsed
+score head for the operating point; see the Summary at the top of this
+report.

@@ -1,3 +1,7 @@
+# STATUS: PREPARED, NOT RUN — needs a GPU (none in the environment this was
+# written in). No results from this config exist yet; the small-object work
+# is locked at docs/DECISIONS.md #24 / eval/REPORT.md "Summary".
+#
 # detector/train.py config — docs/DECISIONS.md #22, small-object step 2:
 # the higher-resolution arm: input_size 640 (stock SSDLite is 320).
 #

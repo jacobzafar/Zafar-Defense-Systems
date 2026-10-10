@@ -1,3 +1,7 @@
+# STATUS: PREPARED, NOT RUN — needs a GPU (none in the environment this was
+# written in). No results from this config exist yet; the small-object work
+# is locked at docs/DECISIONS.md #24 / eval/REPORT.md "Summary".
+#
 # Same as dut_anti_uav_val500.yaml but for weights trained at input_size 640
 # (config/dut_train_640.yaml) — the detector must run at the size it was trained at.
 # eval/harness.py config for a 500-image seeded subset of DUT Anti-UAV's
