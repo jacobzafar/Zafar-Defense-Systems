@@ -51,6 +51,7 @@ def build_detector(config: dict[str, Any] | None = None) -> BaseDetector:
             tile_cols=config.get("tile_cols", 1),
             tile_overlap=config.get("tile_overlap", 0.2),
             tile_include_full_frame=config.get("tile_include_full_frame", True),
+            input_size=config.get("input_size", 320),
         )
 
     raise ValueError(

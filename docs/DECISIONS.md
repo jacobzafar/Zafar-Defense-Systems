@@ -981,3 +981,47 @@ default because it costs 6× latency (16.8 → 2.8 FPS on this CPU),
 breaking real-time, and doubles FPs at the operating threshold. It is
 the right tool for an offline/forensic pass or a GPU deployment, and
 worth re-measuring once a retrained model's scores discriminate.
+
+## 22. Configurable input size (640): prepared for Colab, not trained here
+
+**What.** `TrainConfig.input_size` / `DroneDetector(input_size=...)` /
+detector config `input_size` (default 320, unchanged behavior).
+torchvision hard-codes 320 in `ssdlite320_mobilenet_v3_large()`, but the
+size lives only in `model.transform`, so `build_single_class_model`
+swaps in a `GeneralizedRCNNTransform` at the requested size; the
+COCO-pretrained weights and anchor layout are unchanged. `input_size` is
+part of the resume check (a checkpoint without the key, i.e. every
+existing one, counts as 320). `detector/train.py --output-dir` overrides
+the config's output dir so Colab runs can write straight to Drive.
+
+**Not trained: no CUDA in this environment** (`torch.cuda.is_available()`
+is False; CPU-only torch build). Measured here instead:
+
+- A 640 training smoke check on 16 real DUT train images (4 batches):
+  forward/backward works, losses finite (15.7, 20.5, 6.9, 9.3) — a
+  plumbing check, not a training result.
+- Latency, 100 real test frames, same untrained weights at both sizes
+  (latency does not depend on weight values): 320 → 35.0 ms, 640 → 72.2 ms
+  mean on this CPU, i.e. **640 costs ~2.06×**. The absolute values are
+  lower than the harness's 59.39 ms for dut_v1 (a trained model emits
+  more candidate boxes to post-process), so only the ratio carries over.
+
+**Expectation, stated before any result so it can be checked against
+one:** anchors are generated as fractions of the input (smallest = 0.2
+of the side), so going 320 → 640 doubles both a drone's size *and* the
+smallest anchor (64 → 128px) — the object-to-anchor mismatch #21 found
+for small drones does not shrink. What 640 does add is a finer first
+feature map (40×40 vs 20×20) and 4× the input pixels. So 640 may help
+medium drones and localization, but there is a mechanistic reason to
+expect it alone will not fix small-drone AP; that would need anchor/
+feature-map changes (step 3). Run it anyway — it is cheap on a GPU and
+this expectation could be wrong.
+
+**Design of the run.** Two configs, identical except input size, both
+12 epochs with per-epoch weights kept: `config/dut_train_640.yaml` and
+`config/dut_train_320_control.yaml`. The 320 control is needed because
+dut_v2 (20 epochs at 320) kept no per-epoch weights and its weights are
+not in this environment, so there is no checkpoint-selected 320 model to
+compare against. Each arm's best epoch is chosen on val500 with
+`eval/select_checkpoint.py`, then reported once on test
+(`eval/config/dut_anti_uav_test_640.yaml` / `_test_320_control.yaml`).

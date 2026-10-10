@@ -1,0 +1,24 @@
+# detector/train.py config — docs/DECISIONS.md #22, small-object step 2:
+# the matched control: identical to config/dut_train_640.yaml except input_size 320. Needed because dut_v2 (the earlier 20-epoch 320 run) kept no per-epoch weights, so it cannot be checkpoint-selected the same way.
+#
+# Same data/split/seed/LR/batch as config/dut_train_v2.yaml. Needs a GPU
+# (device: auto picks CUDA); not run on this repo's CPU-only environment.
+# 12 epochs is a chosen budget, not a tuned value: dut_v2's val AP
+# peaked at epoch 3 of 20, and every epoch's weights are kept
+# (weights_epoch_NNN.pt) so the best one is selected on val afterwards
+# with eval/select_checkpoint.py — not assumed to be the last.
+# On Colab pass --output-dir to a mounted Drive path so checkpoints
+# survive disconnects; re-running the same command resumes.
+dataset_dir: data/dut-anti-uav/converted/train
+output_dir: models/dut_320_control
+target_class: drone
+val_fraction: 0.0
+epochs: 12
+batch_size: 8
+learning_rate: 0.001
+seed: 42
+input_size: 320
+device: auto
+dataset_name: dut-anti-uav
+val_dataset_dir: data/dut-anti-uav/converted/val
+val_max_images: 500

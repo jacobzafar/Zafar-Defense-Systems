@@ -73,7 +73,7 @@ import os
 import random
 import sys
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import MISSING, asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -94,6 +94,7 @@ try:
         ssdlite320_mobilenet_v3_large,
     )
     from torchvision.models.detection import _utils as det_utils
+    from torchvision.models.detection.transform import GeneralizedRCNNTransform
     from torchvision.models.detection.ssdlite import SSDLiteClassificationHead
     from torchvision.transforms.functional import to_tensor
     from PIL import Image
@@ -119,6 +120,7 @@ class TrainConfig:
     learning_rate: float = 0.001
     grad_clip_max_norm: float = 10.0
     seed: int = 42
+    input_size: int = 320  # square input the model resizes every image to; see build_single_class_model
     device: str = "auto"  # "auto" = cuda if torch.cuda.is_available() else cpu; any other value is used as-is
     val_dataset_dir: str | None = None  # separate held-out split evaluated after every epoch (e.g. DUT's own val/)
     val_max_images: int | None = None  # evaluate a fixed, seeded subset of this many val images (None = all)
@@ -217,12 +219,32 @@ def _collate(batch):
     return tuple(zip(*batch))
 
 
-def build_single_class_model():
-    """SSDLite320 MobileNetV3, COCO-pretrained backbone, head replaced for
-    a single foreground class ("drone") + background."""
+def build_single_class_model(input_size: int = 320):
+    """SSDLite MobileNetV3, COCO-pretrained backbone, head replaced for
+    a single foreground class ("drone") + background.
+
+    `input_size` sets the square size every image is resized to (stock:
+    320). torchvision hard-codes 320 in the factory, but the size lives
+    only in `model.transform`; anchors are generated per forward pass as
+    fractions of the input (scales 0.2-0.95), so the same weights and
+    anchor layout work at any size — at 640 the feature maps double
+    (40x40 first map) and the smallest anchor is 128px. Weights trained at
+    one size should be evaluated at that size (DroneDetector's
+    `input_size`).
+    """
     _require_train_deps()
     weights = SSDLite320_MobileNet_V3_Large_Weights.DEFAULT
     model = ssdlite320_mobilenet_v3_large(weights=weights)
+    if input_size != 320:
+        stock = model.transform
+        model.transform = GeneralizedRCNNTransform(
+            input_size,
+            input_size,
+            stock.image_mean,
+            stock.image_std,
+            size_divisible=1,
+            fixed_size=(input_size, input_size),
+        )
 
     in_channels = det_utils.retrieve_out_channels(model.backbone, (320, 320))
     num_anchors = model.anchor_generator.num_anchors_per_location()
@@ -260,12 +282,19 @@ def epoch_weights_filename(epoch: int) -> str:
 # is deliberately absent (raising it is how a finished run is extended),
 # as are `device` (resume a CPU run on a GPU and vice versa) and dataset
 # paths (mount points differ between Colab sessions and local machines).
-_RESUME_MUST_MATCH = ("target_class", "val_fraction", "batch_size", "learning_rate", "grad_clip_max_norm", "seed")
+_RESUME_MUST_MATCH = (
+    "target_class", "val_fraction", "batch_size", "learning_rate", "grad_clip_max_norm", "seed", "input_size"
+)
 
 # Mirrors DroneDetector's default nms_thresh (detector/drone_detector.py)
 # so the per-epoch val AP@0.5 is computed the same way eval/harness.py
 # computes it for a trained model.
 _VAL_NMS_THRESH = 0.45
+
+
+_TRAIN_CONFIG_DEFAULTS = {
+    name: f.default for name, f in TrainConfig.__dataclass_fields__.items() if f.default is not MISSING
+}
 
 
 def resolve_device(requested: str) -> str:
@@ -384,7 +413,7 @@ def train(config: TrainConfig) -> dict[str, Any]:
 
     resolved_device = resolve_device(config.device)
     device = torch.device(resolved_device)
-    model = build_single_class_model().to(device)
+    model = build_single_class_model(config.input_size).to(device)
     model.train()
     _freeze_batchnorm(model)
 
@@ -410,9 +439,11 @@ def train(config: TrainConfig) -> dict[str, Any]:
     if checkpoint_path.exists():
         checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
         mismatched = {
-            key: (checkpoint["config"].get(key), getattr(config, key))
+            # A key missing from an older checkpoint means it was written
+            # before that field existed, i.e. with the field's default.
+            key: (checkpoint["config"].get(key, _TRAIN_CONFIG_DEFAULTS.get(key)), getattr(config, key))
             for key in _RESUME_MUST_MATCH
-            if checkpoint["config"].get(key) != getattr(config, key)
+            if checkpoint["config"].get(key, _TRAIN_CONFIG_DEFAULTS.get(key)) != getattr(config, key)
         }
         if mismatched:
             raise ValueError(
@@ -521,6 +552,13 @@ def main() -> int:
             "commercial_ok=True. Overrides 'commercial_only' in the config file if passed."
         ),
     )
+    parser.add_argument(
+        "--output-dir",
+        help=(
+            "Overrides the config's output_dir — e.g. a mounted Google Drive path on Colab, "
+            "so checkpoints survive the VM. Re-run with the same value to resume."
+        ),
+    )
     args = parser.parse_args()
 
     try:
@@ -531,6 +569,8 @@ def main() -> int:
 
     if args.commercial_only:
         config.commercial_only = True
+    if args.output_dir:
+        config.output_dir = args.output_dir
 
     try:
         report = train(config)

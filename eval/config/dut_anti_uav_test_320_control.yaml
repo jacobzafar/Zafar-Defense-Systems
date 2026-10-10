@@ -1,0 +1,18 @@
+# eval/harness.py config: the frozen DUT *test* set, for the single
+# checkpoint of config/dut_train_320_control.yaml chosen on val500 by
+# eval/select_checkpoint.py. Copy that chosen weights_epoch_NNN.pt to
+# models/dut_320_control/best.pt first. Reported once — never used to choose.
+eval_set_dir: data/frozen_eval/dut-anti-uav-test
+detector:
+  backend: drone
+  weights_path: models/dut_320_control/best.pt
+  confidence_threshold: 0.35
+  nms_thresh: 0.45
+  input_size: 320
+tracker:
+  backend: iou
+iou_threshold: 0.5
+small_object_area_px: 1024.0
+expected_checksum: d7d58f3a2e22d3aec8814ae47f38ee145a735f53c4e9cab16c8732a1eaa2244c
+output_json_path: eval/output/dut_320_control_test_metric_card.json
+output_report_path: eval/output/dut_320_control_test_REPORT.md

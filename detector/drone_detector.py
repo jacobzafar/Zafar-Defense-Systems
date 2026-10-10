@@ -52,6 +52,7 @@ class DroneDetector(BaseDetector):
         tile_cols: int = 1,
         tile_overlap: float = 0.2,
         tile_include_full_frame: bool = True,
+        input_size: int = 320,
     ) -> None:
         if not _TORCH_AVAILABLE:
             raise ImportError(
@@ -78,7 +79,10 @@ class DroneDetector(BaseDetector):
         # this backend.
         from detector.train import build_single_class_model
 
-        self._model = build_single_class_model()
+        # Must match the input_size the weights were trained at
+        # (detector/train.py TrainConfig.input_size; default 320).
+        self.input_size = input_size
+        self._model = build_single_class_model(input_size)
         state_dict = torch.load(weights_file, map_location="cpu")
         self._model.load_state_dict(state_dict)
         self._model.eval()
@@ -114,7 +118,7 @@ class DroneDetector(BaseDetector):
         self.tile_include_full_frame = tile_include_full_frame
 
     def warmup(self) -> None:
-        dummy = torch.zeros(3, 320, 320, dtype=torch.uint8)
+        dummy = torch.zeros(3, self.input_size, self.input_size, dtype=torch.uint8)
         with torch.no_grad():
             self._model([self._preprocess(dummy)])
 

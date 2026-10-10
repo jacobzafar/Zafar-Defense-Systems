@@ -301,3 +301,54 @@ def test_val_dataset_dir_refuses_the_frozen_test_set(synthetic_drone_dataset, tm
     )
     with pytest.raises(EvalSetFrozenError):
         train(config)
+
+
+def test_input_size_changes_only_the_resize_and_keeps_relative_anchors():
+    import torch
+
+    from detector.train import build_single_class_model
+
+    model = build_single_class_model(input_size=640).eval()
+    assert model.transform.fixed_size == (640, 640)
+    images, _ = model.transform([torch.zeros(3, 1080, 1920)])
+    assert tuple(images.tensors.shape[-2:]) == (640, 640)
+    features = list(model.backbone(images.tensors).values())
+    assert tuple(features[0].shape[-2:]) == (40, 40)  # 20x20 at the stock 320
+    anchors = model.anchor_generator(images, features)[0]
+    sides = ((anchors[:, 2] - anchors[:, 0]) * (anchors[:, 3] - anchors[:, 1])).sqrt()
+    assert float(sides.min()) == pytest.approx(0.2 * 640)  # smallest anchor stays 0.2 of the input side
+
+
+def test_train_at_a_non_default_input_size_and_detect_at_the_same_size(synthetic_drone_dataset, tmp_path):
+    import numpy as np
+
+    from detector.drone_detector import DroneDetector
+
+    config = TrainConfig(
+        dataset_dir=str(synthetic_drone_dataset), output_dir=str(tmp_path / "out"), epochs=1, batch_size=2, input_size=160
+    )
+    report = train(config)
+    assert report["config"]["input_size"] == 160
+
+    detector = DroneDetector(weights_path=report["weights_path"], confidence_threshold=0.0, input_size=160)
+    assert detector._model.transform.fixed_size == (160, 160)
+    assert isinstance(detector.detect(np.zeros((64, 64, 3), dtype=np.uint8)), list)
+
+
+def test_resume_refuses_a_different_input_size_but_treats_old_checkpoints_as_320(synthetic_drone_dataset, tmp_path):
+    import torch
+
+    output_dir = tmp_path / "out"
+    base = dict(dataset_dir=str(synthetic_drone_dataset), output_dir=str(output_dir), batch_size=2)
+    train(TrainConfig(**base, epochs=1))
+
+    with pytest.raises(ValueError, match="input_size"):
+        train(TrainConfig(**base, epochs=2, input_size=640))
+
+    # A checkpoint written before input_size existed has no such key: it was a 320 run.
+    checkpoint_path = output_dir / "checkpoint.pt"
+    checkpoint = torch.load(checkpoint_path, weights_only=False)
+    del checkpoint["config"]["input_size"]
+    torch.save(checkpoint, checkpoint_path)
+    report = train(TrainConfig(**base, epochs=2))
+    assert report["resumed_from_epoch"] == 1
