@@ -42,3 +42,16 @@ def test_raises_on_empty_source_dataset(tmp_path):
 
     with pytest.raises(ValueError, match="No images found"):
         build_frozen_eval_set(empty_dataset_dir, tmp_path / "frozen_eval")
+
+
+def test_max_images_keeps_the_same_seeded_subset_train_py_validates_on(synthetic_drone_dataset, tmp_path):
+    import random
+
+    from detector.datasets.loader import load_manifest_dataset
+
+    eval_set_dir = tmp_path / "subset"
+    build_frozen_eval_set(synthetic_drone_dataset, eval_set_dir, max_images=3, seed=42)
+
+    expected = [s.image_path.name for s in random.Random(42).sample(load_manifest_dataset(synthetic_drone_dataset), 3)]
+    sequences = load_eval_manifest(eval_set_dir)
+    assert [seq.frames[0].image_path.name for seq in sequences] == expected

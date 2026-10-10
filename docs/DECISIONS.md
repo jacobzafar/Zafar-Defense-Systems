@@ -891,3 +891,36 @@ Colab) is not in this environment, so it was not evaluated. Results, in
 **Read:** the ~0.1 val / ~0.19 test numbers are real for these models;
 the gap to published baselines is a genuine small/medium-object
 detection problem (large-object AP is ~0.73), not an evaluation artifact.
+
+## 20. Small-object work: reference line and selection protocol
+
+Entry #19's corrected eval showed dut_v1 is good on large drones and
+near-blind on small ones. Before any change aimed at that, this entry
+fixes the reference line and the protocol every change is judged by.
+
+**Protocol.** Settings (tile grid, input size, checkpoint) are chosen on
+`data/frozen_eval/dut-anti-uav-val500` — the same 500-image seeded
+(seed 42) subset of DUT's *val* split that `config/dut_train_v2.yaml`'s
+per-epoch evaluation uses, built with the new
+`eval.build_frozen_eval_set --max-images 500 --seed 42`
+(`eval/config/dut_anti_uav_val500.yaml`). The frozen *test* set is
+reported for a chosen setting, never used to choose. Every comparison
+reports AP-by-size, operating-point TP/FP counts and precision, and
+latency — DUT test and val contain no hard-negative frames, so
+false-alarm rate per empty frame is not measurable on either; false
+positives per frame at the operating threshold are the stand-in.
+
+**Reference line: dut_v1, untiled, 320×320 input, no retraining**
+(measured 2026-10-10, each run alone on this 4-core CPU):
+
+| Set | AP@0.5 | AP@[.50:.95] | Small | Medium | Large | Recall@0.35 | TP / FP @0.35 | FP / frame | ms/frame (p95) | FPS |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Val500 (503 GT: 261 S / 178 M / 64 L) | 0.0934 | 0.0546 | 0.0023 | 0.0166 | 0.6879 | 0.3280 | 165 / 70,731 | 141.5 | 65.00 (83.17) | 15.39 |
+| Test (2245 GT: 848 S / 836 M / 561 L) | 0.1929 | 0.1074 | 0.0016 | 0.0218 | 0.7294 | 0.4548 | 1,021 / 310,970 | 141.3 | 59.39 (82.53) | 16.84 |
+
+The test row reproduces entry #19's numbers exactly; its latency
+replaces #19's concurrently-measured 90.82 ms as the clean figure.
+Note dut_v1's scores all sit in a narrow ~0.43-0.47 band (entry #18), so
+nearly every one of its ~141 detections per frame clears 0.35 — the FP
+count at the operating threshold is mostly that collapse, not a
+threshold choice.

@@ -1,0 +1,21 @@
+# eval/harness.py config for a 500-image seeded subset of DUT Anti-UAV's
+# official *val* split — the same images config/dut_train_v2.yaml's
+# per-epoch evaluation uses (seed 42, val_max_images 500). This is the
+# set for choosing inference/training settings (tile grid, input size,
+# checkpoint): the frozen *test* set is reported once at the end and never
+# tuned on. Built with:
+#   python -m eval.build_frozen_eval_set --source-dataset-dir data/dut-anti-uav/converted/val \
+#       --eval-set-dir data/frozen_eval/dut-anti-uav-val500 --max-images 500 --seed 42
+eval_set_dir: data/frozen_eval/dut-anti-uav-val500
+detector:
+  backend: drone
+  weights_path: models/dut_v1/weights.pt
+  confidence_threshold: 0.35
+  nms_thresh: 0.45
+tracker:
+  backend: iou
+iou_threshold: 0.5
+small_object_area_px: 1024.0
+expected_checksum: a0118155abbf54437735bb28d5e24a172434e1b98c965251b9b7a30d610aa1d5
+output_json_path: eval/output/dut_anti_uav_val500_metric_card.json
+output_report_path: eval/output/dut_anti_uav_val500_REPORT.md
