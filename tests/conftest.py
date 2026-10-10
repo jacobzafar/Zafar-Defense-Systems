@@ -94,3 +94,57 @@ def build_synthetic_eval_set(eval_set_dir: Path, freeze: bool = True) -> Path:
 @pytest.fixture
 def synthetic_eval_set(tmp_path):
     return build_synthetic_eval_set(tmp_path / "synthetic_eval_set")
+
+
+# --- Own-footage pipeline (tools/ingest_footage.py and friends) ------------
+
+SYNTHETIC_CLIP_FPS = 15.0
+SYNTHETIC_CLIP_SECONDS = 2
+SYNTHETIC_CLIP_SIZE = (320, 240)
+
+
+def synthetic_clip_box(frame_index: int) -> tuple[int, int, int, int]:
+    """(x1, y1, x2, y2) of the dark "drone" in frame `frame_index` of the clip
+    written by `write_synthetic_clip` — the ground truth a reviewer would draw."""
+    x = 20 + frame_index * 4
+    return (x, 100, x + 30, 120)
+
+
+def write_synthetic_clip(path: Path) -> Path:
+    """A 2-second, 15 FPS, 320x240 mp4: a dark rectangle crossing a sky-blue
+    background. Generated, so the pipeline is testable without real footage."""
+    cv2 = pytest.importorskip("cv2")
+    np = pytest.importorskip("numpy")
+
+    width, height = SYNTHETIC_CLIP_SIZE
+    writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), SYNTHETIC_CLIP_FPS, (width, height))
+    for i in range(int(SYNTHETIC_CLIP_FPS * SYNTHETIC_CLIP_SECONDS)):
+        frame = np.full((height, width, 3), (200, 170, 120), dtype=np.uint8)
+        x1, y1, x2, y2 = synthetic_clip_box(i)
+        cv2.rectangle(frame, (x1, y1), (x2, y2), (30, 30, 30), -1)
+        writer.write(frame)
+    writer.release()
+    return path
+
+
+POSITIVE_CLIP_META = {
+    "drone_type": "fpv-quad",
+    "distance_band": "close-lt50m",
+    "lighting": "daylight-clear",
+    "background": "clean-sky",
+    "is_hard_negative": False,
+}
+
+
+@pytest.fixture
+def synthetic_video(tmp_path):
+    return write_synthetic_clip(tmp_path / "C0001.mp4")
+
+
+@pytest.fixture
+def ingested_clip(tmp_path, synthetic_video):
+    """A clip dir as tools/ingest_footage.py writes it (10 frames at 5 FPS)."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
+    import ingest_footage
+
+    return ingest_footage.ingest(synthetic_video, dict(POSITIVE_CLIP_META), tmp_path / "clips", clip_id="c0001", sample_fps=5.0)
