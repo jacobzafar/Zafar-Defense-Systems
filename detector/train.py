@@ -219,9 +219,13 @@ def _collate(batch):
     return tuple(zip(*batch))
 
 
-def build_single_class_model(input_size: int = 320):
+def build_single_class_model(input_size: int = 320, pretrained: bool = True):
     """SSDLite MobileNetV3, COCO-pretrained backbone, head replaced for
     a single foreground class ("drone") + background.
+
+    `pretrained=False` builds the same architecture with random weights
+    and no download — enough for anything that only needs the anchor
+    layout (eval/anchor_coverage.py), which does not depend on weights.
 
     `input_size` sets the square size every image is resized to (stock:
     320). torchvision hard-codes 320 in the factory, but the size lives
@@ -233,8 +237,10 @@ def build_single_class_model(input_size: int = 320):
     `input_size`).
     """
     _require_train_deps()
-    weights = SSDLite320_MobileNet_V3_Large_Weights.DEFAULT
-    model = ssdlite320_mobilenet_v3_large(weights=weights)
+    if pretrained:
+        model = ssdlite320_mobilenet_v3_large(weights=SSDLite320_MobileNet_V3_Large_Weights.DEFAULT)
+    else:
+        model = ssdlite320_mobilenet_v3_large(weights=None, weights_backbone=None)
     if input_size != 320:
         stock = model.transform
         model.transform = GeneralizedRCNNTransform(
