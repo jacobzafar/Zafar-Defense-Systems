@@ -50,6 +50,34 @@ def test_ap50_matches_hand_computed_example():
     assert abs(ap - 0.8333333333) < 1e-6
 
 
+def test_ap50_ranks_low_confidence_detections_instead_of_cutting_them_off():
+    # Regression test for docs/DECISIONS.md #19: AP was computed only over
+    # detections that survived the detector's 0.35 confidence cutoff.
+    # Two frames, one GT each. Predictions ranked by score:
+    #   0.9 TP (f1), 0.8 FP (f1), 0.2 TP (f2 — below the old 0.35 cutoff)
+    # All detections: tps=[1,0,1] -> recalls=[0.5,0.5,1.0],
+    #   precisions=[1.0,0.5,0.667], envelope=[1.0,0.667,0.667]
+    #   AP = 0.5*1.0 + 0*0.667 + 0.5*0.667 = 0.8333...
+    # Cut off at 0.35: only the first two remain -> recalls=[0.5,0.5],
+    #   envelope=[1.0,0.5] -> AP = 0.5*1.0 + 0 = 0.5 (understated).
+    gt1 = EvalBox(x1=0, y1=0, x2=10, y2=10, category="drone")
+    gt2 = EvalBox(x1=50, y1=50, x2=60, y2=60, category="drone")
+    preds_f1 = [PredBox(0, 0, 10, 10, 0.9), PredBox(30, 30, 40, 40, 0.8)]
+    preds_f2 = [PredBox(50, 50, 60, 60, 0.2)]
+
+    all_detections = [
+        FrameEvalData(frame_id="f1", gt_boxes=[gt1], pred_boxes=preds_f1),
+        FrameEvalData(frame_id="f2", gt_boxes=[gt2], pred_boxes=preds_f2),
+    ]
+    cut_off_at_035 = [
+        FrameEvalData(frame_id=f.frame_id, gt_boxes=f.gt_boxes, pred_boxes=[p for p in f.pred_boxes if p.confidence >= 0.35])
+        for f in all_detections
+    ]
+
+    assert abs(compute_ap50(all_detections) - 0.8333333333) < 1e-6
+    assert abs(compute_ap50(cut_off_at_035) - 0.5) < 1e-9
+
+
 def test_ap50_is_one_for_a_perfect_detector():
     gt = EvalBox(x1=0, y1=0, x2=10, y2=10, category="drone")
     pred = PredBox(x1=0, y1=0, x2=10, y2=10, confidence=0.99)

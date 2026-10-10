@@ -256,11 +256,10 @@ CHECKPOINT_FILENAME = "checkpoint.pt"
 # paths (mount points differ between Colab sessions and local machines).
 _RESUME_MUST_MATCH = ("target_class", "val_fraction", "batch_size", "learning_rate", "grad_clip_max_norm", "seed")
 
-# Mirrors DroneDetector's default nms_thresh and confidence_threshold
-# (detector/drone_detector.py) so the per-epoch val AP@0.5 is computed the
-# same way eval/harness.py computes it for a trained model.
+# Mirrors DroneDetector's default nms_thresh (detector/drone_detector.py)
+# so the per-epoch val AP@0.5 is computed the same way eval/harness.py
+# computes it for a trained model.
 _VAL_NMS_THRESH = 0.45
-_VAL_CONFIDENCE_THRESHOLD = 0.35
 
 
 def resolve_device(requested: str) -> str:
@@ -293,10 +292,9 @@ def _restore_rng_state(state: dict[str, Any]) -> None:
 
 
 def evaluate_on_val(model, samples: list[ImageSample], target_class: str, device) -> dict[str, Any]:
-    """Quick per-epoch evaluation: AP@0.5 (computed like eval/harness.py
-    does for DroneDetector — nms_thresh 0.45, detections below 0.35
-    dropped) plus min/max/spread of every raw "drone" score the model
-    emits before that confidence filter. Leaves the model in train mode
+    """Quick per-epoch evaluation: threshold-independent AP@0.5 over every
+    raw "drone" detection (nms_thresh 0.45, no confidence cutoff — same as
+    eval/harness.py) plus min/max/spread of those raw scores. Leaves the model in train mode
     with BatchNorm frozen, as the training loop expects."""
     from eval.metrics import FrameEvalData, PredBox, compute_ap50
     from eval.schema import EvalBox
@@ -318,8 +316,6 @@ def evaluate_on_val(model, samples: list[ImageSample], target_class: str, device
                         continue
                     confidence = float(score)
                     raw_scores.append(confidence)
-                    if confidence < _VAL_CONFIDENCE_THRESHOLD:
-                        continue
                     x1, y1, x2, y2 = (float(v) for v in box)
                     pred_boxes.append(PredBox(x1=x1, y1=y1, x2=x2, y2=y2, confidence=confidence))
                 gt_boxes = [

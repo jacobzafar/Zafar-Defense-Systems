@@ -828,3 +828,41 @@ evidence for why that's the right call, not a substitute for doing it.
 against a from-scratch diagnostic script (pairwise-IoU and score-histogram
 measurements) independent of the harness itself. Full test suite: run
 below, before committing.
+
+## 19. AP@0.5 was computed after a 0.35 confidence cutoff: audit and fix
+
+**Audit (before changing anything).** `compute_ap50` (`eval/metrics.py`)
+itself was correct — all-point PR-envelope integration over whatever
+predictions it is handed, no cutoff of its own. But it was never handed
+all predictions:
+
+- `eval/harness.py` built predictions from `detector.detect(image)`, and
+  `DroneDetector.detect` (`detector/drone_detector.py`) drops every score
+  below `confidence_threshold` — 0.35, from `eval/config/dut_anti_uav.yaml`
+  via `detector/factory.py`. So every AP in `eval/REPORT.md` up to this
+  point was integrated over a PR curve truncated at score 0.35.
+- `detector/train.py`'s per-epoch `evaluate_on_val` (added in the
+  resumable-training commit) copied the same 0.35 cutoff deliberately,
+  to match the harness — so the dut_v2 Colab run's per-epoch val AP
+  (~0.09-0.10, best 0.128 at epoch 3) carries the same understatement.
+- `DroneDetector` also rounded scores to 3 decimals, creating ranking
+  ties that `compute_ap50` broke by frame order.
+- Not a bug: the model's own `score_thresh=0.001` and 300-detections-per-
+  image cap (standard; COCO itself caps at 100 detections per image).
+
+A cutoff can only lower AP: removing the lowest-scored predictions
+truncates the PR curve's tail (lost recall) and can only lower the
+backward-max precision envelope before it, never raise it. So the old
+numbers are lower bounds on the true threshold-independent AP.
+
+**Fix.** The harness now builds the detector with its cutoff disabled
+(`confidence_threshold: 0.0`), computes AP over every raw detection, and
+applies the configured `confidence_threshold` itself — only to the
+operating-point metrics (small-object recall, false-alarm rate) and to
+what the tracker sees. `evaluate_on_val` drops its cutoff too, and
+`DroneDetector` no longer rounds scores (the UI formats them itself).
+Hand-computed regression test: two GT boxes with a TP at 0.9, an FP at
+0.8, and a TP at 0.2 give AP 0.8333 over all detections vs. 0.5 cut off
+at 0.35 (`tests/test_eval_metrics.py`); plus a harness-level test that a
+perfect detector scoring only 0.2 now gets AP 1.0 (was 0.0) while its
+operating-point recall at 0.35 stays 0.

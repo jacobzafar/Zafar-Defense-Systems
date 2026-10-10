@@ -129,7 +129,7 @@ class DroneDetector(BaseDetector):
                     y1=y1 / height,
                     x2=x2 / width,
                     y2=y2 / height,
-                    confidence=round(confidence, 3),
+                    confidence=confidence,  # unrounded: rounding creates ties that distort AP ranking
                     class_name="drone",
                 )
             )

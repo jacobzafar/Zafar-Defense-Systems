@@ -11,6 +11,9 @@ Metric definitions (fixed here so results are comparable run to run):
   precision/recall curve with all-point (COCO/VOC2010+-style) precision
   envelope interpolation. Reported as "AP@0.5", not "mAP", since this is a
   single-class problem — mAP is only meaningful with class averaging.
+  Threshold-independent: callers must pass *every* detection the model
+  emits (no confidence cutoff) — a cutoff truncates the PR curve and can
+  only lower AP. eval/harness.py does this; see docs/DECISIONS.md #19.
 - **Small-object recall**: recall restricted to ground-truth boxes with
   pixel area below `small_area_threshold_px` (default 1024 = 32x32,
   COCO's own "small object" convention), at a fixed confidence threshold

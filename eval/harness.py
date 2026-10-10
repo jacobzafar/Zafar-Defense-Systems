@@ -115,7 +115,25 @@ def run_evaluation(config: EvalConfig) -> MetricCard:
     if not sequences:
         raise ValueError(f"No sequences found in eval set: {eval_set_dir}")
 
-    detector = build_detector(config.detector)
+    # AP must be threshold-independent: rank *every* detection the model
+    # emits, then integrate the full PR curve. So the detector is built with
+    # its confidence cutoff disabled, and the configured
+    # `confidence_threshold` is applied here afterwards, only to the
+    # operating-point metrics (small-object recall, false-alarm rate) and
+    # to what the tracker sees — the same detections the live pipeline
+    # would act on. Before this, the cutoff was applied inside
+    # detector.detect(), so AP only ever saw detections >= 0.35. See
+    # docs/DECISIONS.md entry #19.
+    operating_threshold = config.detector.get("confidence_threshold")
+    detector_config = dict(config.detector)
+    if operating_threshold is not None:
+        detector_config["confidence_threshold"] = 0.0
+    detector = build_detector(detector_config)
+
+    def at_operating_point(items):
+        if operating_threshold is None:
+            return list(items)
+        return [item for item in items if item.confidence >= operating_threshold]
 
     all_frame_eval_data: list[FrameEvalData] = []
     latencies_ms: list[float] = []
@@ -152,16 +170,21 @@ def run_evaluation(config: EvalConfig) -> MetricCard:
                 )
             )
 
-            tracks = tracker.update(detections)
+            tracks = tracker.update(at_operating_point(detections))
             per_frame_tracks.append(tracks)
 
         tracks_by_sequence[sequence.sequence_id] = per_frame_tracks
 
+    operating_frames = [
+        FrameEvalData(frame_id=f.frame_id, gt_boxes=f.gt_boxes, pred_boxes=at_operating_point(f.pred_boxes))
+        for f in all_frame_eval_data
+    ]
+
     ap50 = compute_ap50(all_frame_eval_data, iou_threshold=config.iou_threshold)
     small_object_recall = compute_small_object_recall(
-        all_frame_eval_data, small_area_threshold_px=config.small_object_area_px, iou_threshold=config.iou_threshold
+        operating_frames, small_area_threshold_px=config.small_object_area_px, iou_threshold=config.iou_threshold
     )
-    false_alarm_rate = compute_false_alarm_rate(all_frame_eval_data)
+    false_alarm_rate = compute_false_alarm_rate(operating_frames)
     latency = compute_latency_stats(latencies_ms)
     track_continuity = compute_track_continuity(
         sequences, tracks_by_sequence, iou_threshold=config.track_continuity_iou_threshold

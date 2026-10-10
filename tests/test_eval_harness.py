@@ -110,3 +110,45 @@ def test_missing_eval_set_raises_file_not_found(tmp_path):
     config = _make_config(tmp_path / "does-not-exist", tmp_path / "out")
     with pytest.raises(FileNotFoundError):
         run_evaluation(config)
+
+
+class _LowConfidencePerfectDetector:
+    """Finds the fixture's bright (255) drone square exactly, but always
+    with confidence 0.2 — below the 0.35 operating threshold. Honors
+    confidence_threshold the way the real model-based backends do."""
+
+    name = "low_confidence_perfect"
+
+    def __init__(self, confidence_threshold):
+        self.confidence_threshold = confidence_threshold
+
+    def detect(self, frame):
+        import numpy as np
+
+        from detector.base import Detection
+
+        ys, xs = np.nonzero(frame.max(axis=2) > 220)
+        if len(xs) == 0 or 0.2 < self.confidence_threshold:
+            return []
+        h, w = frame.shape[:2]
+        return [Detection(x1=xs.min() / w, y1=ys.min() / h, x2=(xs.max() + 1) / w, y2=(ys.max() + 1) / h, confidence=0.2)]
+
+
+def test_ap_uses_all_detections_while_operating_metrics_use_the_threshold(synthetic_eval_set, tmp_path, monkeypatch):
+    """docs/DECISIONS.md #19: the configured confidence_threshold must not
+    reach AP (threshold-independent), only the operating-point metrics."""
+    import eval.harness as harness
+
+    built_with = {}
+
+    def fake_build_detector(detector_config):
+        built_with.update(detector_config)
+        return _LowConfidencePerfectDetector(detector_config["confidence_threshold"])
+
+    monkeypatch.setattr(harness, "build_detector", fake_build_detector)
+    config = _make_config(synthetic_eval_set, tmp_path / "out", detector={"backend": "fake", "confidence_threshold": 0.35})
+    metric_card = run_evaluation(config)
+
+    assert built_with["confidence_threshold"] == 0.0
+    assert metric_card.ap50 == 1.0  # every GT found, no false positives — was 0.0 with the cutoff inside detect()
+    assert metric_card.small_object_recall["num_small_gt_matched"] == 0  # all detections are below 0.35
