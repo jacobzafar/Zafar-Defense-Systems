@@ -21,6 +21,13 @@ counts as seen through every tile that fully contains it, scaled from
 that tile into the input (plus the full frame, if the detector includes
 it), and its best IoU is the best over those views.
 
+Layouts the model does not have yet (#23's options) are simulated with
+torchvision's own `DefaultBoxGenerator` via `simulated_anchor_boxes`,
+passed to `best_anchor_ious(anchors=...)`. `OPTION_B_640` is #23's
+recommended option B (stride-8 map + 16px anchors at 640); it reproduces
+#23's row exactly on DUT train: small 24.2% (0.394), medium 75.2%
+(0.573), large 86.1% (0.743).
+
 Size buckets are COCO's, by box area in the *original* image
 (eval/metrics.py's COCO_AREA_RANGES), as in #23.
 
@@ -48,18 +55,44 @@ _IOU_CHUNK = 2048  # rows per box_iou call: bounds memory at 640 (12,828 anchors
 
 
 @lru_cache(maxsize=None)
-def anchor_boxes(input_size: int = 320):
+def anchor_boxes(input_size: int = 320, architecture: str = "ssdlite", anchor_scales: tuple[float, ...] | None = None):
     """(N, 4) x1y1x2y2 anchors, in input-pixel coordinates, of the
-    single-class SSDLite model at `input_size`."""
+    single-class model at `input_size` — built for real by
+    detector/train.py, so `architecture="ssdlite_stride8"` measures the
+    stride-8 variant's own anchors, not a simulation of them."""
     import torch
 
     from detector.train import build_single_class_model
 
-    model = build_single_class_model(input_size, pretrained=False).eval()
+    model = build_single_class_model(
+        input_size, pretrained=False, architecture=architecture, anchor_scales=anchor_scales
+    ).eval()
     images, _ = model.transform([torch.zeros(3, input_size, input_size)])
     with torch.no_grad():
         features = list(model.backbone(images.tensors).values())
     return model.anchor_generator(images, features)[0]
+
+
+# SSDLite's stock layout: 6 maps, aspect ratios [2, 3] per level, scales
+# 0.2-0.95 — simulated_anchor_boxes(320, STOCK_MAPS_320, 0.2) equals
+# anchor_boxes(320) exactly (tests/test_anchor_coverage.py).
+STOCK_MAPS_320 = (20, 10, 5, 3, 2, 1)
+# #23 option B: MobileNetV3's stride-8 stage added (80x80 at 640), 7 levels, smallest anchor 0.025 x 640 = 16px.
+OPTION_B_640 = dict(input_size=640, feature_maps=(80, 40, 20, 10, 5, 3, 2), min_ratio=0.025)
+
+
+@lru_cache(maxsize=None)
+def simulated_anchor_boxes(input_size: int, feature_maps: tuple[int, ...], min_ratio: float, max_ratio: float = 0.95):
+    """(N, 4) anchors of a hypothetical SSD layout: torchvision's
+    `DefaultBoxGenerator` (as SSDLite builds it) on square feature maps of
+    the given sizes. No model is built; anchors do not depend on weights."""
+    import torch
+    from torchvision.models.detection.anchor_utils import DefaultBoxGenerator
+    from torchvision.models.detection.image_list import ImageList
+
+    generator = DefaultBoxGenerator([[2, 3]] * len(feature_maps), min_ratio=min_ratio, max_ratio=max_ratio)
+    images = ImageList(torch.zeros(1, 3, input_size, input_size), [(input_size, input_size)])
+    return generator(images, [torch.zeros(1, 1, m, m) for m in feature_maps])[0]
 
 
 def size_bucket(area: float) -> str:
@@ -91,15 +124,21 @@ def best_anchor_ious(
     tile_cols: int = 1,
     tile_overlap: float = 0.2,
     include_full_frame: bool = True,
+    anchors=None,
+    architecture: str = "ssdlite",
+    anchor_scales: tuple[float, ...] | None = None,
 ) -> list[float]:
     """Best anchor IoU for each box (x1, y1, x2, y2, original-image
-    pixels), given each box's own image (width, height)."""
+    pixels), given each box's own image (width, height). `anchors`
+    overrides the real model's layout at `input_size` (e.g. with
+    `simulated_anchor_boxes`)."""
     import torch
     from torchvision.ops import box_iou
 
     from detector.tiling import tile_grid
 
-    anchors = anchor_boxes(input_size)
+    if anchors is None:
+        anchors = anchor_boxes(input_size, architecture, anchor_scales)
     tiled = tile_rows * tile_cols > 1
     rows, owners = [], []
     for index, (box, (width, height)) in enumerate(zip(boxes, image_sizes)):
@@ -163,24 +202,40 @@ def format_cell(stats: dict) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--dataset-dir", required=True, help="Unified-layout dir (images/ + annotations.json)")
+    parser.add_argument(
+        "--train-config",
+        help="detector/train.py YAML: take input_size / architecture / anchor_scales from it (overrides those flags)",
+    )
     parser.add_argument("--input-size", type=int, default=320)
+    parser.add_argument("--architecture", default="ssdlite", help="ssdlite (stock) or ssdlite_stride8")
+    parser.add_argument("--anchor-scales", type=float, nargs="+", help="ssdlite_stride8 only: 8 anchor scales")
     parser.add_argument("--tile-rows", type=int, default=1)
     parser.add_argument("--tile-cols", type=int, default=1)
     parser.add_argument("--tile-overlap", type=float, default=0.2)
     parser.add_argument("--no-full-frame", action="store_true", help="Tiled: don't also count the full-frame view")
     args = parser.parse_args()
+    if args.train_config:
+        from detector.train import TrainConfig
+
+        train_config = TrainConfig.from_yaml(args.train_config)
+        args.input_size, args.architecture = train_config.input_size, train_config.architecture
+        args.anchor_scales = train_config.anchor_scales
+    scales = tuple(args.anchor_scales) if args.anchor_scales else None
 
     from detector.datasets.loader import load_manifest_dataset
 
     summary = check_samples(
         load_manifest_dataset(args.dataset_dir),
         input_size=args.input_size,
+        architecture=args.architecture,
+        anchor_scales=scales,
         tile_rows=args.tile_rows,
         tile_cols=args.tile_cols,
         tile_overlap=args.tile_overlap,
         include_full_frame=not args.no_full_frame,
     )
-    print(f"Anchors: {len(anchor_boxes(args.input_size))} at input {args.input_size}, tiles {args.tile_rows}x{args.tile_cols}")
+    anchors = anchor_boxes(args.input_size, args.architecture, scales)
+    print(f"Anchors ({args.architecture}): {len(anchors)} at input {args.input_size}, tiles {args.tile_rows}x{args.tile_cols}")
     print("| Bucket | Boxes | Share best IoU >= 0.5 (median best IoU) |")
     print("|---|---|---|")
     for name, stats in summary.items():

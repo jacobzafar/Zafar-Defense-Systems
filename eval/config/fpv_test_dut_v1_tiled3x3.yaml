@@ -1,0 +1,25 @@
+# eval/harness.py config — docs/DECISIONS.md #26: dut_v1, 3x3 tiled + full frame (#21),
+# on the held-out FPV test blocks (all scenarios). Test set built with:
+#   python tools/split_visiodect_fpv.py --source-dir data/visiodect/converted-fpv \
+#       --output-dir data/visiodect/fpv-split
+#   python -m eval.build_frozen_eval_set --source-dataset-dir data/visiodect/fpv-split/test \
+#       --eval-set-dir data/frozen_eval/visiodect-fpv-test
+# (per-scenario dirs: fpv-split/test filtered by its "scenario" key; see docs/fas0-feasibility.md).
+eval_set_dir: data/frozen_eval/visiodect-fpv-test
+detector:
+  backend: drone
+  weights_path: models/dut_v1/weights.pt
+  tile_rows: 3
+  tile_cols: 3
+  tile_overlap: 0.2
+  tile_include_full_frame: true
+  confidence_threshold: 0.35
+  nms_thresh: 0.45
+tracker:
+  backend: iou
+iou_threshold: 0.5
+small_object_area_px: 1024.0
+expected_checksum: ce85b0d59a7e276df11dc4836a85cab6f81915e4e7afc28d8c0ec4b18b3b4bab
+output_json_path: eval/output/fpv_test_dut_v1_tiled3x3_metric_card.json
+output_report_path: eval/output/fpv_test_dut_v1_tiled3x3_REPORT.md
+output_predictions_path: data/eval_predictions/fpv_test_dut_v1_tiled3x3.jsonl.gz

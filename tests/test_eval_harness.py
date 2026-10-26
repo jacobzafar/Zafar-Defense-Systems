@@ -156,3 +156,14 @@ def test_ap_uses_all_detections_while_operating_metrics_use_the_threshold(synthe
     assert metric_card.operating_point["recall"] == 0.0
     assert metric_card.ap50_by_size["small"]["ap"] == 1.0
     assert metric_card.ap50_by_size["medium"]["ap"] is None
+
+
+def test_predictions_dump_holds_every_raw_prediction(synthetic_eval_set, tmp_path):
+    import gzip
+
+    dump = tmp_path / "out" / "preds.jsonl.gz"
+    metric_card = run_evaluation(_make_config(synthetic_eval_set, tmp_path / "out", output_predictions_path=str(dump)))
+    rows = [json.loads(line) for line in gzip.open(dump, "rt")]
+    assert len(rows) == metric_card.num_frames
+    assert {"frame_id", "width", "height", "gt", "pred"} <= set(rows[0])
+    assert sum(len(r["gt"]) for r in rows) == metric_card.operating_point["num_gt_boxes"]

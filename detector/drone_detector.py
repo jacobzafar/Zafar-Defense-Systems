@@ -38,6 +38,31 @@ class DroneWeightsNotFoundError(FileNotFoundError):
     """Raised when no trained drone-detector weights file is present."""
 
 
+def _check_training_report(weights_file: Path, input_size: int, architecture: str, anchor_scales) -> None:
+    """Refuse weights whose own training_report.json (written next to them
+    by detector/train.py) names a different layout. A wrong architecture
+    fails load_state_dict anyway, but wrong anchor scales or input size
+    load silently and decode every box against the wrong anchors."""
+    import json
+
+    report_path = weights_file.parent / "training_report.json"
+    if not report_path.exists():
+        return
+    trained = json.loads(report_path.read_text(encoding="utf-8")).get("config", {})
+    expected = {"input_size": input_size, "architecture": architecture, "anchor_scales": anchor_scales}
+    defaults = {"input_size": 320, "architecture": "ssdlite", "anchor_scales": None}
+    mismatched = {
+        key: (trained.get(key, defaults[key]), value)
+        for key, value in expected.items()
+        if trained.get(key, defaults[key]) != value
+    }
+    if mismatched:
+        raise ValueError(
+            f"Detector config does not match how {weights_file} was trained "
+            f"(trained vs. configured: {mismatched}, from {report_path})."
+        )
+
+
 class DroneDetector(BaseDetector):
     """Single-class ("drone") SSDLite detector loaded from local weights."""
 
@@ -53,6 +78,8 @@ class DroneDetector(BaseDetector):
         tile_overlap: float = 0.2,
         tile_include_full_frame: bool = True,
         input_size: int = 320,
+        architecture: str = "ssdlite",
+        anchor_scales: list[float] | None = None,
     ) -> None:
         if not _TORCH_AVAILABLE:
             raise ImportError(
@@ -82,7 +109,9 @@ class DroneDetector(BaseDetector):
         # Must match the input_size the weights were trained at
         # (detector/train.py TrainConfig.input_size; default 320).
         self.input_size = input_size
-        self._model = build_single_class_model(input_size)
+        self.architecture = architecture
+        _check_training_report(weights_file, input_size, architecture, anchor_scales)
+        self._model = build_single_class_model(input_size, architecture=architecture, anchor_scales=anchor_scales)
         state_dict = torch.load(weights_file, map_location="cpu")
         self._model.load_state_dict(state_dict)
         self._model.eval()

@@ -1121,3 +1121,28 @@ Precisely what was measured for the "0% matchable" claim: stock anchors
 at 320 and 640 input, and 3×3 tiling (simulated) — not every possible
 tile count; sufficiently fine tiling would eventually enlarge small
 drones into anchor range, at a latency cost already prohibitive at 3×3.
+
+## 25. Fas 0 feasibility on real FPV footage: fails as-is
+
+Lever 1 of #24, run on the FPV footage we already hold (VisioDECT
+`DJIFPV`: 3,439 ground-perspective drones, never trained on). Full write-up
+and reproduction: `docs/fas0-feasibility.md`.
+
+- **Anchor coverage (#23's check):** 0.0% matchable at 320 and 640;
+  14.9% with 3×3 tiling. The FPV median apparent size is 3.4% of the
+  frame; the untiled model needs ≥ ~15%.
+- **dut_v1 detection:** untiled AP@0.5 0.0022; 3×3 tiled 0.2237, all of
+  it from drones ≥ ~5% apparent size (AP 0.93 there, ≤0.06 below 4%).
+  183–300 false alarms per empty frame (#18's collapse).
+- **#23 option B has a scale gap** as written (linear scales leave ~4-14%
+  apparent size uncovered: 42.5% FPV coverage). Geometric scales give
+  74.7%, floor ~2%. Build B with geometric scales.
+- New tooling: `visiodect.py --models`, `eval/size_coverage.py`
+  (apparent size + coverage per group, synthetic size sweep),
+  `anchor_coverage.simulated_anchor_boxes` / `OPTION_B_640`, the harness's
+  optional `output_predictions_path`, and `eval/breakdown.py` (AP/recall
+  by apparent size from those dumps).
+
+**Verdict: fail.** The positioning needs the stride-8 change (and a fix
+for the score collapse) before any FPV claim, and range beyond tens of
+metres also needs narrow optics. Nothing implemented beyond measurement.

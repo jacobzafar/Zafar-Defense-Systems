@@ -1,0 +1,21 @@
+# eval/harness.py config — docs/DECISIONS.md #26: stock SSDLite 320 trained on the FPV split (config/stock320_fpv_control.yaml, the CONTROL) - RESEARCH ONLY,
+# on the held-out FPV test blocks (the Cloudy scenario only). Test set built with:
+#   python tools/split_visiodect_fpv.py --source-dir data/visiodect/converted-fpv \
+#       --output-dir data/visiodect/fpv-split
+#   python -m eval.build_frozen_eval_set --source-dataset-dir data/visiodect/fpv-split/test-cloudy \
+#       --eval-set-dir data/frozen_eval/visiodect-fpv-test-cloudy
+# (per-scenario dirs: fpv-split/test filtered by its "scenario" key; see docs/fas0-feasibility.md).
+eval_set_dir: data/frozen_eval/visiodect-fpv-test-cloudy
+detector:
+  backend: drone
+  weights_path: models/stock320_fpv_control/weights_best.pt
+  confidence_threshold: 0.35
+  nms_thresh: 0.45
+tracker:
+  backend: iou
+iou_threshold: 0.5
+small_object_area_px: 1024.0
+expected_checksum: 4a328029981dad221c0c871ee526317efa79c9ccc3f09fc97c8b2d182036da87
+output_json_path: eval/output/fpv_test_stock320_fpv_cloudy_metric_card.json
+output_report_path: eval/output/fpv_test_stock320_fpv_cloudy_REPORT.md
+output_predictions_path: data/eval_predictions/fpv_test_stock320_fpv_cloudy.jsonl.gz

@@ -1,0 +1,27 @@
+# detector/train.py config — docs/DECISIONS.md #26 CONTROL for
+# config/stride8_fpv.yaml: the stock SSDLite layout (6 levels, smallest
+# anchor 0.2 of the input; 0.0% of FPV drones matchable) at 320, trained
+# on exactly the same FPV split, seed, schedule and augmentation. Any AP
+# this reaches comes from in-domain FPV training alone; the stride-8 run's
+# margin over it is what the architecture change buys.
+#
+# PROVENANCE: RESEARCH / FEASIBILITY MODEL ONLY — same as stride8_fpv.yaml
+# (VisioDECT license UNVERIFIED; --commercial-only refuses this config).
+dataset_dir: data/visiodect/fpv-split/train
+output_dir: models/stock320_fpv_control
+target_class: drone
+val_fraction: 0.0
+val_dataset_dir: data/visiodect/fpv-split/val
+leakage_guard_eval_dirs:
+  - data/frozen_eval/visiodect-fpv-test
+architecture: ssdlite
+input_size: 320
+epochs: 30
+early_stopping_patience: 5
+batch_size: 8
+learning_rate: 0.001
+hflip_prob: 0.5
+seed: 42
+device: auto
+dataset_name: visiodect
+purpose: research/feasibility (Fas 0) control - not for commercial use

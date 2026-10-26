@@ -21,7 +21,12 @@ combinations; see docs/datasets.md for the exact counts):
 into this repo's unified schema (see `detector/datasets/loader.py`):
 
     <output_dir>/images/<file>.jpg   # symlinked, not copied
-    <output_dir>/annotations.json
+    <output_dir>/annotations.json    # each image entry also carries its
+                                     # "model" and "scenario" (extra keys the
+                                     # loader ignores; kept for breakdowns)
+
+`--models DJIFPV` converts only the named model(s) — e.g. the FPV-class
+subset used by docs/fas0-feasibility.md.
 
 Three real data-quality/completeness issues were found in the copy this
 was written against and are handled explicitly, not silently or by
@@ -226,7 +231,16 @@ def _convert_one_combo(
         else:
             width, height = _read_image_size(image_path)
 
-        images_out.append({"id": image_id, "file_name": image_path.name, "width": width, "height": height})
+        images_out.append(
+            {
+                "id": image_id,
+                "file_name": image_path.name,
+                "width": width,
+                "height": height,
+                "model": model,
+                "scenario": image_scenario,
+            }
+        )
         symlink_path = out_images_dir / image_path.name
         if not symlink_path.exists():
             symlink_path.symlink_to(image_path.resolve())
@@ -259,12 +273,17 @@ def _convert_one_combo(
     return stats, images_out, annotations_out, next_image_id
 
 
-def convert_dataset(raw_dir: str | Path, output_dir: str | Path) -> ConversionStats:
+def convert_dataset(
+    raw_dir: str | Path, output_dir: str | Path, models: list[str] | None = None
+) -> ConversionStats:
     """Convert the whole VisioDECT tree (all models, all scenarios) into
     one combined unified-schema directory. There is no official train/
     val/test split shipped with this dataset, unlike DUT Anti-UAV, so
     (per this task's scope) this produces one directory, not a per-split
     one — splitting is a decision for whoever actually trains on it.
+
+    `models` restricts conversion to those UAV model directories (names
+    from `UAV_MODELS`); default all.
 
     Raises `FileNotFoundError` if `raw_dir` itself doesn't exist, or
     `VisioDectFormatError` if a `csv.csv` file doesn't match the expected
@@ -272,6 +291,9 @@ def convert_dataset(raw_dir: str | Path, output_dir: str | Path) -> ConversionSt
     label file at all is not an error — see the module docstring.
     """
     raw_dir = Path(raw_dir)
+    unknown = sorted(set(models or []) - set(UAV_MODELS))
+    if unknown:
+        raise ValueError(f"Unknown VisioDECT model(s) {unknown}; expected some of {UAV_MODELS}")
     if not raw_dir.is_dir():
         raise FileNotFoundError(f"VisioDECT raw directory not found: {raw_dir}")
 
@@ -284,7 +306,7 @@ def convert_dataset(raw_dir: str | Path, output_dir: str | Path) -> ConversionSt
     per_model_scenario: list[ModelScenarioStats] = []
     next_image_id = 1
 
-    for model in UAV_MODELS:
+    for model in [m for m in UAV_MODELS if not models or m in models]:
         for image_scenario, label_scenario in SCENARIOS:
             stats, images_out, annotations_out, next_image_id = _convert_one_combo(
                 model, image_scenario, label_scenario, raw_dir, out_images_dir, next_image_id
@@ -321,9 +343,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--raw-dir", required=True, help="Path to the VisioDECT root (contains one dir per UAV model)")
     parser.add_argument("--output-dir", required=True, help="Where to write images/ + annotations.json")
+    parser.add_argument("--models", nargs="+", choices=UAV_MODELS, help="Only these UAV models (default: all)")
     args = parser.parse_args()
 
-    stats = convert_dataset(args.raw_dir, args.output_dir)
+    stats = convert_dataset(args.raw_dir, args.output_dir, models=args.models)
     stats.print_summary()
     return 0
 

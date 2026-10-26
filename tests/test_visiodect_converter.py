@@ -156,6 +156,26 @@ def test_malformed_csv_raises_visiodect_format_error(tmp_path):
         convert_dataset(raw_dir, tmp_path / "converted")
 
 
+def test_models_filter_converts_only_named_models_and_tags_scenario(tmp_path):
+    raw_dir = _raw(tmp_path)
+    _write_image(raw_dir / "DJIFPV" / "images" / "Sunny" / "fpv1.jpg", 120, 80)
+    _write_csv(raw_dir / "DJIFPV" / "labels" / "sunny" / "csv.csv", [["DJI_FPV_Sunny", 1, 1, 8, 8, "fpv1.jpg", 120, 80]])
+
+    output_dir = tmp_path / "converted"
+    stats = convert_dataset(raw_dir, output_dir, models=["DJIFPV"])
+
+    assert stats.num_images == 1 and stats.num_drone_instances == 1
+    assert {s.model for s in stats.per_model_scenario} == {"DJIFPV"}
+    images = json.loads((output_dir / "annotations.json").read_text())["images"]
+    assert [(i["file_name"], i["model"], i["scenario"]) for i in images] == [("fpv1.jpg", "DJIFPV", "Sunny")]
+    assert len(load_manifest_dataset(output_dir)) == 1
+
+
+def test_unknown_model_name_raises(tmp_path):
+    with pytest.raises(ValueError, match="Unknown VisioDECT model"):
+        convert_dataset(_raw(tmp_path), tmp_path / "converted", models=["NotADrone"])
+
+
 def _raw(tmp_path: Path) -> Path:
     raw_dir = tmp_path / "raw"
     _build_raw_dir(raw_dir)

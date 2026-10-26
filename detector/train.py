@@ -121,11 +121,17 @@ class TrainConfig:
     grad_clip_max_norm: float = 10.0
     seed: int = 42
     input_size: int = 320  # square input the model resizes every image to; see build_single_class_model
+    architecture: str = "ssdlite"  # "ssdlite" (stock, 6 levels) or "ssdlite_stride8" (detector/ssdlite_stride8.py)
+    anchor_scales: list[float] | None = None  # ssdlite_stride8 only: 8 scales; None = its GEOMETRIC_SCALES
+    hflip_prob: float = 0.0  # per-image horizontal-flip probability during training (0 = no augmentation)
+    leakage_guard_eval_dirs: list[str] = field(default_factory=list)  # frozen eval sets no train/val image may be in
+    early_stopping_patience: int | None = None  # stop after this many epochs without a new best val AP@0.5
     device: str = "auto"  # "auto" = cuda if torch.cuda.is_available() else cpu; any other value is used as-is
     val_dataset_dir: str | None = None  # separate held-out split evaluated after every epoch (e.g. DUT's own val/)
     val_max_images: int | None = None  # evaluate a fixed, seeded subset of this many val images (None = all)
     dataset_name: str | None = None  # key into detector.datasets.manifest.DATASET_REGISTRY, for --commercial-only
     commercial_only: bool = False
+    purpose: str | None = None  # e.g. "research/feasibility": recorded in the report's provenance block
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "TrainConfig":
@@ -168,6 +174,21 @@ def _assert_commercial_clearance(config: "TrainConfig") -> None:
         )
 
 
+def _provenance(config: "TrainConfig") -> dict[str, Any]:
+    """What the weights were trained on and whether that is commercially
+    cleared, written into training_report.json next to them, so a
+    research checkpoint says so wherever it is copied."""
+    manifest = get_manifest(config.dataset_name) if config.dataset_name else None
+    return {
+        "dataset_name": config.dataset_name,
+        "license_id": manifest.license_id if manifest else None,
+        "commercial_ok": manifest.commercial_ok if manifest else None,
+        "trained_with_commercial_only": config.commercial_only,
+        "commercially_cleared": bool(config.commercial_only and manifest and manifest.commercial_ok is True),
+        "purpose": config.purpose,
+    }
+
+
 def _require_train_deps() -> None:
     if not _TRAIN_DEPS_AVAILABLE:
         raise ImportError(
@@ -192,9 +213,10 @@ class _DroneTrainingDataset(Dataset):
     handling described above.
     """
 
-    def __init__(self, samples: list[ImageSample], target_class: str) -> None:
+    def __init__(self, samples: list[ImageSample], target_class: str, hflip_prob: float = 0.0) -> None:
         self.samples = samples
         self.target_class = target_class
+        self.hflip_prob = hflip_prob
 
     def __len__(self) -> int:
         return len(self.samples)
@@ -212,6 +234,13 @@ class _DroneTrainingDataset(Dataset):
             boxes_tensor = torch.zeros((0, 4), dtype=torch.float32)
             labels_tensor = torch.zeros((0,), dtype=torch.int64)
 
+        if self.hflip_prob and random.random() < self.hflip_prob:
+            image_tensor = image_tensor.flip(-1)
+            width = image_tensor.shape[-1]
+            boxes_tensor = boxes_tensor[:, [2, 1, 0, 3]] * torch.tensor([-1.0, 1.0, -1.0, 1.0]) + torch.tensor(
+                [width, 0.0, width, 0.0]
+            )
+
         return image_tensor, {"boxes": boxes_tensor, "labels": labels_tensor}
 
 
@@ -219,9 +248,23 @@ def _collate(batch):
     return tuple(zip(*batch))
 
 
-def build_single_class_model(input_size: int = 320, pretrained: bool = True):
+ARCHITECTURES = ("ssdlite", "ssdlite_stride8")
+
+
+def build_single_class_model(
+    input_size: int = 320,
+    pretrained: bool = True,
+    architecture: str = "ssdlite",
+    anchor_scales: list[float] | tuple[float, ...] | None = None,
+):
     """SSDLite MobileNetV3, COCO-pretrained backbone, head replaced for
     a single foreground class ("drone") + background.
+
+    `architecture="ssdlite_stride8"` adds a stride-8 level with
+    geometrically spaced anchors (`anchor_scales`, default its
+    GEOMETRIC_SCALES) — see detector/ssdlite_stride8.py. The default,
+    "ssdlite", is the stock layout every existing config and checkpoint
+    uses.
 
     `pretrained=False` builds the same architecture with random weights
     and no download — enough for anything that only needs the anchor
@@ -237,6 +280,14 @@ def build_single_class_model(input_size: int = 320, pretrained: bool = True):
     `input_size`).
     """
     _require_train_deps()
+    if architecture not in ARCHITECTURES:
+        raise ValueError(f"Unknown architecture '{architecture}'. Valid options: {', '.join(ARCHITECTURES)}.")
+    if architecture == "ssdlite_stride8":
+        from detector.ssdlite_stride8 import GEOMETRIC_SCALES, build_stride8_model
+
+        return build_stride8_model(input_size, anchor_scales=anchor_scales or GEOMETRIC_SCALES, pretrained=pretrained)
+    if anchor_scales is not None:
+        raise ValueError("anchor_scales is only supported with architecture 'ssdlite_stride8'")
     if pretrained:
         model = ssdlite320_mobilenet_v3_large(weights=SSDLite320_MobileNet_V3_Large_Weights.DEFAULT)
     else:
@@ -279,6 +330,7 @@ def _freeze_batchnorm(model) -> None:
 
 
 CHECKPOINT_FILENAME = "checkpoint.pt"
+BEST_WEIGHTS_FILENAME = "weights_best.pt"  # copy of the best-val-AP epoch's weights
 
 
 def epoch_weights_filename(epoch: int) -> str:
@@ -289,7 +341,8 @@ def epoch_weights_filename(epoch: int) -> str:
 # as are `device` (resume a CPU run on a GPU and vice versa) and dataset
 # paths (mount points differ between Colab sessions and local machines).
 _RESUME_MUST_MATCH = (
-    "target_class", "val_fraction", "batch_size", "learning_rate", "grad_clip_max_norm", "seed", "input_size"
+    "target_class", "val_fraction", "batch_size", "learning_rate", "grad_clip_max_norm", "seed", "input_size",
+    "architecture", "anchor_scales", "hflip_prob",
 )
 
 # Mirrors DroneDetector's default nms_thresh (detector/drone_detector.py)
@@ -381,11 +434,60 @@ def evaluate_on_val(model, samples: list[ImageSample], target_class: str, device
     }
 
 
+class DataLeakageError(RuntimeError):
+    """Raised when a training/val image is also in a frozen eval set."""
+
+
+def _file_digest(path: Path) -> str:
+    import hashlib
+
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def assert_no_eval_overlap(samples: list[ImageSample], eval_set_dirs: list[str]) -> int:
+    """Refuse to train if any image in `samples` has the same *content*
+    (sha256) as an image of a frozen eval set. Content, not path: eval
+    sets symlink their images and Colab mounts data elsewhere, so paths
+    prove nothing. Returns how many eval images were checked."""
+    eval_digests: dict[str, str] = {}
+    checked = 0
+    for eval_dir in eval_set_dirs:
+        images = sorted((Path(eval_dir) / "images").iterdir())
+        if not images:
+            raise ValueError(f"Leakage guard: no images in {eval_dir}/images")
+        eval_digests.update({_file_digest(p): f"{eval_dir}/images/{p.name}" for p in images})
+        checked += len(images)
+    leaks = [
+        (str(s.image_path), eval_digests[d]) for s in samples if (d := _file_digest(s.image_path)) in eval_digests
+    ]
+    if leaks:
+        raise DataLeakageError(
+            f"{len(leaks)} training/val image(s) are also in a frozen eval set, e.g. {leaks[:3]}. "
+            f"Rebuild the training split without them."
+        )
+    return checked
+
+
 def _split_train_val(samples: list[ImageSample], val_fraction: float, seed: int) -> tuple[list[ImageSample], list[ImageSample]]:
     shuffled = list(samples)
     random.Random(seed).shuffle(shuffled)
     val_count = int(len(shuffled) * val_fraction)
     return shuffled[val_count:], shuffled[:val_count]
+
+
+def _best_val_epoch(val_history: list[dict[str, Any]]) -> int | None:
+    """Epoch with the highest val AP@0.5 (earliest on ties), or None."""
+    if not val_history:
+        return None
+    return max(val_history, key=lambda h: (h["ap50"], -h["epoch"]))["epoch"]
+
+
+def _should_stop_early(val_history: list[dict[str, Any]], patience: int | None) -> bool:
+    """True once `patience` epochs have passed since the best val AP@0.5.
+    Also true straight after resuming a run that had already met it."""
+    if not patience or not val_history:
+        return False
+    return val_history[-1]["epoch"] - _best_val_epoch(val_history) >= patience
 
 
 def train(config: TrainConfig) -> dict[str, Any]:
@@ -417,14 +519,18 @@ def train(config: TrainConfig) -> dict[str, Any]:
         if config.val_max_images is not None and len(val_eval_samples) > config.val_max_images:
             val_eval_samples = random.Random(config.seed).sample(val_eval_samples, config.val_max_images)
 
+    leakage_checked_images = 0
+    if config.leakage_guard_eval_dirs:
+        leakage_checked_images = assert_no_eval_overlap(samples + val_eval_samples, config.leakage_guard_eval_dirs)
+
     resolved_device = resolve_device(config.device)
     device = torch.device(resolved_device)
-    model = build_single_class_model(config.input_size).to(device)
+    model = build_single_class_model(config.input_size, architecture=config.architecture, anchor_scales=config.anchor_scales).to(device)
     model.train()
     _freeze_batchnorm(model)
 
     train_loader = DataLoader(
-        _DroneTrainingDataset(train_samples, config.target_class),
+        _DroneTrainingDataset(train_samples, config.target_class, config.hflip_prob),
         batch_size=config.batch_size,
         shuffle=True,
         collate_fn=_collate,
@@ -440,6 +546,7 @@ def train(config: TrainConfig) -> dict[str, Any]:
 
     epoch_losses: list[float] = []
     val_history: list[dict[str, Any]] = []
+    stopped_early = False
     start_epoch = 0
     resumed_from_epoch: int | None = None
     if checkpoint_path.exists():
@@ -481,9 +588,17 @@ def train(config: TrainConfig) -> dict[str, Any]:
             "final_loss": round(epoch_losses[-1], 6) if epoch_losses else None,
             "val_dataset_dir": config.val_dataset_dir,
             "val_per_epoch": val_history,
+            "best_val_epoch": _best_val_epoch(val_history),
+            "stopped_early": stopped_early,
+            "leakage_guard_eval_dirs": config.leakage_guard_eval_dirs,
+            "leakage_guard_images_checked": leakage_checked_images,
             "checkpoint_path": str(checkpoint_path),
             "epoch_weights_paths": [str(output_dir / epoch_weights_filename(e)) for e in range(1, len(epoch_losses) + 1)],
             "weights_path": str(weights_path) if status == "complete" else None,
+            "best_weights_path": (
+                str(output_dir / BEST_WEIGHTS_FILENAME) if status == "complete" and val_history else None
+            ),
+            "provenance": _provenance(config),
             "torch_version": torch.__version__,
             "seed": config.seed,
             "device": resolved_device,
@@ -498,6 +613,9 @@ def train(config: TrainConfig) -> dict[str, Any]:
         }
 
     report_path = output_dir / "training_report.json"
+    if _should_stop_early(val_history, config.early_stopping_patience):
+        stopped_early = True  # resumed a run that had already stopped early: don't train further
+        start_epoch = config.epochs
     for epoch in range(start_epoch, config.epochs):
         running_loss = 0.0
         num_batches = 0
@@ -539,7 +657,20 @@ def train(config: TrainConfig) -> dict[str, Any]:
         val_summary = f", val {val_history[-1]}" if val_eval_samples else ""
         print(f"Epoch {epoch + 1}/{config.epochs}: loss {epoch_losses[-1]:.6f}{val_summary}", file=sys.stderr)
 
+        if _should_stop_early(val_history, config.early_stopping_patience):
+            stopped_early = True
+            print(
+                f"Early stopping: no new best val AP@0.5 for {config.early_stopping_patience} epoch(s); "
+                f"best was epoch {_best_val_epoch(val_history)}.",
+                file=sys.stderr,
+            )
+            break
+
     torch.save(model.state_dict(), weights_path)
+    best_epoch = _best_val_epoch(val_history)
+    if best_epoch is not None:  # the epoch chosen on val, under a fixed name for eval configs
+        best_path = output_dir / epoch_weights_filename(best_epoch)
+        _save_checkpoint_atomically(torch.load(best_path, map_location="cpu"), output_dir / BEST_WEIGHTS_FILENAME)
     report = build_report("complete")
     report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
 

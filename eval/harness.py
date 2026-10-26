@@ -71,6 +71,11 @@ class EvalConfig:
     expected_checksum: str | None = None
     output_json_path: str = "eval/output/metric_card.json"
     output_report_path: str = "eval/output/REPORT.md"
+    # Optional gzipped JSONL, one line per frame: size, GT boxes and every
+    # raw prediction (no cutoff), for breakdowns the metric card doesn't
+    # carry (eval/breakdown.py). Off by default: tiled runs emit ~300
+    # boxes/frame.
+    output_predictions_path: str | None = None
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "EvalConfig":
@@ -144,6 +149,7 @@ def run_evaluation(config: EvalConfig) -> MetricCard:
         return [item for item in items if item.confidence >= operating_threshold]
 
     all_frame_eval_data: list[FrameEvalData] = []
+    frame_sizes: list[tuple[int, int]] = []
     latencies_ms: list[float] = []
     tracks_by_sequence: dict[str, list[list]] = {}
 
@@ -170,6 +176,7 @@ def run_evaluation(config: EvalConfig) -> MetricCard:
                 )
                 for d in detections
             ]
+            frame_sizes.append((frame.width, frame.height))
             all_frame_eval_data.append(
                 FrameEvalData(
                     frame_id=f"{frame.sequence_id}#{frame.frame_index}",
@@ -182,6 +189,9 @@ def run_evaluation(config: EvalConfig) -> MetricCard:
             per_frame_tracks.append(tracks)
 
         tracks_by_sequence[sequence.sequence_id] = per_frame_tracks
+
+    if config.output_predictions_path:
+        write_predictions(config.output_predictions_path, all_frame_eval_data, frame_sizes)
 
     operating_frames = [
         FrameEvalData(frame_id=f.frame_id, gt_boxes=f.gt_boxes, pred_boxes=at_operating_point(f.pred_boxes))
@@ -220,6 +230,25 @@ def run_evaluation(config: EvalConfig) -> MetricCard:
         manifest_checksum=manifest_checksum,
         evaluated_at=time.strftime("%Y-%m-%dT%H:%M:%S"),
     )
+
+
+def write_predictions(path: str | Path, frames: list[FrameEvalData], sizes: list[tuple[int, int]]) -> None:
+    """Gzipped JSONL: {"frame_id", "width", "height", "gt": [[x1,y1,x2,y2]],
+    "pred": [[x1,y1,x2,y2,confidence]]} per frame, pixels, all predictions."""
+    import gzip
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with gzip.open(path, "wt", encoding="utf-8") as handle:
+        for frame, (width, height) in zip(frames, sizes):
+            row = {
+                "frame_id": frame.frame_id,
+                "width": width,
+                "height": height,
+                "gt": [[round(v, 2) for v in (b.x1, b.y1, b.x2, b.y2)] for b in frame.gt_boxes],
+                "pred": [[round(p.x1, 2), round(p.y1, 2), round(p.x2, 2), round(p.y2, 2), round(p.confidence, 6)] for p in frame.pred_boxes],
+            }
+            handle.write(json.dumps(row) + "\n")
 
 
 def write_outputs(metric_card: MetricCard, config: EvalConfig) -> None:

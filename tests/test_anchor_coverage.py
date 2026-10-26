@@ -76,3 +76,20 @@ def test_check_samples_counts_only_drone_boxes():
         ],
     )
     assert anchor_coverage.check_samples([sample])["all"]["count"] == 1
+
+
+def test_simulated_stock_layout_equals_the_real_model_anchors():
+    import torch
+
+    simulated = anchor_coverage.simulated_anchor_boxes(320, anchor_coverage.STOCK_MAPS_320, 0.2)
+    assert torch.allclose(simulated, anchor_coverage.anchor_boxes(320))
+
+
+def test_option_b_layout_matches_decisions_23_and_matches_a_small_drone():
+    anchors = anchor_coverage.simulated_anchor_boxes(**anchor_coverage.OPTION_B_640)
+    assert len(anchors) == 51228  # #23's "Anchors" column for option B
+    frame = (1920, 1080)
+    small = (900.0, 500.0, 948.0, 527.0)  # 48x27px: 16x16px once resized to 640
+    [stock] = anchor_coverage.best_anchor_ious([small], [frame], input_size=640)
+    [option_b] = anchor_coverage.best_anchor_ious([small], [frame], input_size=640, anchors=anchors)
+    assert stock < anchor_coverage.MATCH_IOU <= option_b

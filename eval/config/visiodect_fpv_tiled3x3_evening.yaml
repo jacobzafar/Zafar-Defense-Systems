@@ -1,0 +1,30 @@
+# eval/harness.py config: dut_v1 (DUT-trained, no retraining), 3x3 tiled
+# inference as chosen on DUT val500 (docs/DECISIONS.md #21), on the
+# VisioDECT DJIFPV subset — the Fas 0 feasibility check
+# (docs/fas0-feasibility.md). Eval set built with:
+#   python detector/datasets/visiodect.py --raw-dir data/visiodect/raw \
+#       --output-dir data/visiodect/converted-fpv --models DJIFPV
+#   python -m eval.build_frozen_eval_set --source-dataset-dir data/visiodect/converted-fpv \
+#       --eval-set-dir data/frozen_eval/visiodect-fpv
+# This config: the Evening scenario only (1,200 frames), split from
+# converted-fpv by the "scenario" key; see docs/fas0-feasibility.md.
+# Full set: 3,600 frames (3,439 drones; 161 unlabeled frames count as hard negatives).
+# Never trained on: VisioDECT is not in any training config.
+eval_set_dir: data/frozen_eval/visiodect-fpv-evening
+detector:
+  backend: drone
+  weights_path: models/dut_v1/weights.pt
+  confidence_threshold: 0.35
+  nms_thresh: 0.45
+  tile_rows: 3
+  tile_cols: 3
+  tile_overlap: 0.2
+  tile_include_full_frame: true
+tracker:
+  backend: iou
+iou_threshold: 0.5
+small_object_area_px: 1024.0
+expected_checksum: 1f109e87be63d96450e0ed26bd81c52c1b3eb7b650a08cd1fa7a77bc3a5b73af
+output_json_path: eval/output/visiodect_fpv_tiled3x3_evening_metric_card.json
+output_report_path: eval/output/visiodect_fpv_tiled3x3_evening_REPORT.md
+output_predictions_path: data/eval_predictions/visiodect_fpv_tiled3x3_evening.jsonl.gz

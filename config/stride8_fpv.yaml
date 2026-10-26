@@ -1,0 +1,38 @@
+# detector/train.py config — docs/DECISIONS.md #26: the Fas 0 closing
+# experiment. SSDLite MobileNetV3 + a stride-8 level with geometric anchor
+# scales (detector/ssdlite_stride8.py), trained on VisioDECT DJIFPV.
+#
+# PROVENANCE: RESEARCH / FEASIBILITY MODEL ONLY. VisioDECT's license is
+# UNVERIFIED (commercial_ok=None in detector/datasets/manifest.py), so
+# `--commercial-only` refuses this config, and training_report.json's
+# provenance block records commercially_cleared: false. These weights must
+# not be used for, or as the starting point of, any commercial model.
+#
+# Data: DJIFPV split into contiguous frame blocks per scenario (the frames
+# are consecutive video; a random split would leak near-duplicates), see
+# tools/split_visiodect_fpv.py. The test blocks are the frozen eval set
+# data/frozen_eval/visiodect-fpv-test; the leakage guard below refuses to
+# train if any train/val image matches one of its images by content.
+#
+# Needs a GPU (device: auto picks CUDA). On Colab pass --output-dir to a
+# mounted Drive path; re-running the same command resumes. Every epoch's
+# weights are kept; the best is the report's best_val_epoch (val AP@0.5).
+dataset_dir: data/visiodect/fpv-split/train
+output_dir: models/stride8_fpv
+target_class: drone
+val_fraction: 0.0
+val_dataset_dir: data/visiodect/fpv-split/val
+leakage_guard_eval_dirs:
+  - data/frozen_eval/visiodect-fpv-test
+architecture: ssdlite_stride8
+anchor_scales: [0.025, 0.042036, 0.070682, 0.118848, 0.199836, 0.336014, 0.564989, 0.95]  # geomspace(0.025, 0.95, 8)
+input_size: 640
+epochs: 30
+early_stopping_patience: 5
+batch_size: 8
+learning_rate: 0.001
+hflip_prob: 0.5
+seed: 42
+device: auto
+dataset_name: visiodect
+purpose: research/feasibility (Fas 0) - not for commercial use
