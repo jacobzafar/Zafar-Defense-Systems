@@ -1146,3 +1146,137 @@ and reproduction: `docs/fas0-feasibility.md`.
 **Verdict: fail.** The positioning needs the stride-8 change (and a fix
 for the score collapse) before any FPV claim, and range beyond tens of
 metres also needs narrow optics. Nothing implemented beyond measurement.
+
+## 26. Stride-8 FPV feasibility: pass with constraints
+
+The Fas 0 closing experiment: #23 option B built for real with geometric
+anchor scales, trained on VisioDECT DJIFPV, measured on held-out FPV
+frames. Write-up: `docs/fas0-feasibility.md` section 6.
+
+**Built.** `detector/ssdlite_stride8.py`: SSDLite MobileNetV3 plus a
+stride-8 level (the C3 block's expansion layer, tapped the way SSDLite
+taps C4). That gives 7 levels (80×80 to 2×2 at 640) and 51,228 anchors,
+with scales `geomspace(0.025, 0.95, 8)`. It is selected with
+`architecture: ssdlite_stride8` (train config / detector config); the
+stock layout remains the default. The real anchors
+(`eval/anchor_coverage.py --train-config config/stride8_fpv.yaml`) match
+the simulation: **74.7%** of all 3,439 FPV drones matchable (#25's
+simulated figure: 74.7%; linear option B: 42.5%). No zero-coverage band
+from 2% to 30% apparent size. Coverage is lower than linear spacing
+above ~14% (46–78% vs 100%; 15 FPV drones are that large).
+
+**Data and guards.** The old FPV eval set holds every DJIFPV frame, and
+each scenario is one continuous video. So `tools/split_visiodect_fpv.py`
+cuts each scenario into 10 contiguous blocks: test = blocks 2 and 7,
+val = block 5, and 30 guard frames are dropped from train next to each
+held-out block. Result: train 1,980 / val 360 / **test 720 frames (662
+drones, 58 empty)**, frozen as `data/frozen_eval/visiodect-fpv-test`.
+`leakage_guard_eval_dirs` refuses training if any train or val image
+matches a test image by content. Training (Colab GPU): early stopping on
+val AP@0.5, seed 42, horizontal flip 0.5. A control
+(`config/stock320_fpv_control.yaml`) uses the stock architecture at 320
+and is otherwise identical.
+
+**Results.** Measured in this repo on the 4-core CPU the dut_v1
+baselines were measured on, all on the same 720 test frames, with
+`eval/config/fpv_test_*.yaml` and `eval.breakdown`. AP is
+threshold-independent; recall and false alarms are at confidence 0.35.
+
+| Model | AP@0.5 | AP@[.5:.95] | AP small / medium (COCO px; no large) | Recall @0.35 | Small recall @0.35 | False alarms, 58 empty frames | FPS |
+|---|---|---|---|---|---|---|---|
+| dut_v1 untiled (baseline) | 0.0013 | 0.0002 | 0.0004 / 0.0089 | 0.181 | 0.171 | 190 per frame | 15.6 |
+| dut_v1 3×3 tiled (baseline) | 0.1956 | 0.0561 | 0.0015 / 0.2905 | 0.369 | 0.165 | 300 per frame (cap) | 3.1 |
+| stock320 control, FPV-trained | 0.7033 | 0.2583 | 0.5347 / 0.8205 | **0.000** (no score ≥ 0.35) | 0.000 | 0 (no detections at all) | 15.6 |
+| **stride-8 (640), FPV-trained** | **0.8627** | **0.4476** | 0.5685 / 0.9774 | **0.829** (precision 0.888) | **0.658** | **0 (THIN, see below)** | **7.4** |
+
+Per scenario, AP@0.5 (recall @0.35):
+
+| Scenario (drones) | dut_v1 untiled | dut_v1 tiled | Control | Stride-8 |
+|---|---|---|---|---|
+| Sunny (240) | 0.0037 | 0.5200 | 0.6696 (0.00) | **0.6541** (0.69) |
+| Cloudy (231) | 0.0005 | 0.0008 | 0.6401 (0.00) | 0.9772 (0.84) |
+| Evening (191) | 0.0011 | 0.0064 | 0.9198 (0.00) | 1.0000 (0.99) |
+
+By apparent size (`eval/breakdown.py`), AP@0.5 (stride-8 recall @0.35):
+
+| Apparent size | Drones | dut_v1 tiled | Control | Stride-8 |
+|---|---|---|---|---|
+| 0–2% | 100 | 0.0003 | 0.6612 | 0.9585 (0.83) |
+| 2–3% | 149 | 0.0101 | 0.6241 | 0.6595 (0.82) |
+| 3–4% | 268 | 0.0503 | 0.7393 | 0.9391 (0.75) |
+| 4–5% | 25 | 0.0075 | 0.9104 | 0.9600 (0.96) |
+| 5–7.5% | 120 | 1.0000 | 0.9754 | 1.0000 (1.00) |
+
+What the numbers say:
+
+- **Most of the gain is FPV training, not architecture.** The control has
+  0.0% of drones anchor-matchable and still reaches AP 0.703 of
+  stride-8's 0.863. #25's "unmatchable ⇒ cannot be learned" was wrong:
+  SSD force-matches each ground-truth box to its best anchor, and box
+  regression learns from that. Anchor coverage measures how *hard* a
+  size is to learn, not a hard limit. Stride-8 even scores 0.96 on
+  drones under 2% (all from Cloudy), below its own anchor floor.
+- **Stride-8 adds both an operating point and a real small-object
+  advantage.**
+  - *Operating point:* the control's AP comes entirely from detections
+    scored below 0.35, so at the deployed threshold it detects nothing.
+    Stride-8 finds 82.9% of drones at 0.35, with precision 0.888 (69 false
+    positives, all on frames that contain a drone).
+  - *Small objects:* the two size views disagree. COCO AP-small is close
+    (0.569 vs 0.535). By apparent size, the operationally relevant view,
+    stride-8 is clearly ahead: 0.96 vs 0.66 at 0–2% and 0.94 vs 0.74 at
+    3–4%. COCO-small includes 60 Sunny drones that are few pixels on
+    720×1280 frames but ≥3% of the frame.
+  - *Soft spot:* the 2–3% band is 0.66 overall: 0.98 on Cloudy's 129
+    drones, ~0.10 on Sunny's 11.
+- **Stride-8 beats 3×3 tiling on both axes at once** (AP@0.5 0.86 vs 0.20,
+  7.4 vs 3.1 FPS on this CPU): tiling as dut_v1's workaround is obsolete.
+- **Sunny: a likely aspect-ratio preprocessing artifact, to investigate.**
+  Stride-8 sits just under the control (0.654 vs 0.670), with recall
+  @0.35 of 0.39 on 3–4% drones. All Sunny test frames are 720×1280
+  portrait, squeezed into a square input. Aspect-preserving resize
+  (letterboxing) is the likely fix. It is untested; this is not recorded
+  as a fundamental weakness.
+- **Evening's 1.0000 / 0.99 rests on 240 frames:** 191 drones and 49
+  empty frames from one clip, every drone 3.0–4.2% of the frame (stride-8's
+  best-covered band), with no COCO-small drone. It is a narrow, easy subset.
+
+**Open gates.**
+1. **Real-time is unsolved.** Stride-8 runs at 7.4 FPS on this CPU
+   (136 ms mean, harness with no confidence cutoff), **1.6× below the
+   12 FPS floor** of the real-time budget. The stock 320 model (dut_v1
+   and the control) runs at 15.6 FPS on the same machine. Nearly all of the cost is the
+   640 input (#22: 640 ≈ 2× 320). Deploying it needs a GPU or edge accelerator, or
+   optimization. FPS on the target hardware is still to be measured.
+2. **False alarms: no rate claimed.** The 0 false alarms rest on only 58
+   empty frames from the same clips (Cloudy 9, Evening 49, Sunny none): a
+   THIN figure. No false-alarm rate will be stated until real hard
+   negatives (birds, planes, clutter) are collected in Fas 1.
+3. **In-domain only.** Test frames are held-out blocks of the *same*
+   clips (same scene, camera, day) as training. The numbers are an upper
+   bound for new footage; it is still VisioDECT, not our own data.
+4. **Range stays optics-bound.** Floor ~2% apparent size: a 0.25 m quad
+   is matchable to ~9 m on a wide (80°) lens and ~40 m at 5× zoom (20°).
+
+**Provenance.** Both checkpoints (`models/stride8_fpv/`,
+`models/stock320_fpv_control/`, gitignored) are **research/feasibility
+only**. VisioDECT's license is UNVERIFIED (`commercial_ok=None`),
+`--commercial-only` refuses both configs, and `detector/train.py` writes
+`commercially_cleared: false` into the training report of any run
+without `--commercial-only`. They must not be used for, or as the
+starting point of, any commercial model. Only `weights_best.pt` was
+brought into the repo (each identified by loading strictly into exactly
+one architecture); the training reports remain on Drive.
+
+**Verdict: pass with constraints.** The architecture fix plus FPV
+training gives a usable detector where the deployed model gave noise.
+It is gated on compute (not real-time on CPU), on own data, on real hard
+negatives, and on optics for range.
+
+**Next architecture track.** Temporal / motion-based detection (background subtraction, frame differencing, optical
+flow, or track-before-detect) is identified as the next architecture track after stride-8.
+A small drone is sub-threshold in a single frame but distinctive in motion against a static
+or near-static background, which matches the fixed-object use case. It is NOT validated on
+public phone footage (VisioDECT), because temporal performance depends heavily on camera
+ego-motion and scene; it is to be tested against own data on the real fixed-camera setup in
+Fas 1.

@@ -5,11 +5,21 @@ ground. Is that reachable with the current detector architecture
 (SSDLite / MobileNetV3, `models/dut_v1`), measured on real
 ground-perspective FPV footage we already have?
 
-**Short answer: no.** On 3,439 real FPV drones:
+> **Update, DECISIONS #26 (section 6):** the stride-8 model with geometric
+> anchors, trained on FPV footage, reaches **AP@0.5 0.863** on 720
+> held-out FPV frames, with recall 0.83 at the 0.35 threshold, at 7.4 FPS
+> on the same CPU. Verdict: **pass with constraints**. It is not real-time
+> on CPU, the result is in-domain only, no false-alarm rate can be stated
+> yet, and range is still bound by the optics. Sections 1–5 below are the
+> original Fas 0 measurement of the *existing* model.
+
+**Short answer (existing model): no.** On 3,439 real FPV drones:
 
 - **The deployed, real-time detector (untiled) finds none of them above
-  noise: AP@0.5 = 0.002.** Not one of the drones fits its anchors (0.0%),
-  so it cannot learn them however long it trains.
+  noise: AP@0.5 = 0.002.** Not one of the drones fits its anchors (0.0%).
+  (Section 6 shows that this does not make them unlearnable: the same
+  architecture trained on FPV reaches AP 0.70, but never above the 0.35
+  threshold.)
 - **With 3×3 tiling (6× slower, 2.9 FPS) it finds drones that cover at
   least ~5% of the frame**, with AP 0.93 at that size. Only 21% of the
   FPV drones in this footage are that large, so overall AP@0.5 is 0.22.
@@ -20,8 +30,8 @@ The stride-8 change recommended in DECISIONS #23 (option B) is required.
 Even with it, range beyond a few tens of metres depends on the lens as
 much as on the model.
 
-Everything here is measurement on existing weights; nothing was trained.
-Verdict at the bottom.
+Sections 1–5 are measurement on existing weights. Section 6 is the
+trained stride-8 experiment. Verdicts at the bottom.
 
 ## What was measured
 
@@ -52,8 +62,9 @@ they were checked or simply not labelled.
 2. **Anchor coverage.** The same check as DECISIONS #23
    (`eval/anchor_coverage.py`). A drone is *matchable* if any of the
    model's anchors overlaps it at IoU ≥ 0.5, the threshold SSD training
-   uses. An unmatchable drone never gets a usable training target. This
-   is a limit on what a model *can learn*, not on what it outputs.
+   uses. An unmatchable drone gets only a forced match to its single best
+   anchor, a poor training target. Section 6 shows this makes such drones
+   *hard* to learn rather than impossible.
    Layouts measured:
    - stock anchors at 320 and 640 input;
    - 3×3 tiling (simulated, as dut_v1's opt-in mode, #21);
@@ -242,6 +253,108 @@ we have?**
   footage we hold shows an FPV drone beyond ~20 m, so that remains
   untested.
 
+## 6. The stride-8 experiment (DECISIONS #26)
+
+**What was built.** #23 option B with geometric anchor scales
+(`detector/ssdlite_stride8.py`, `config/stride8_fpv.yaml`): a stride-8
+level added to SSDLite, 640 input, 7 levels, scales `geomspace(0.025,
+0.95, 8)`. A control (`config/stock320_fpv_control.yaml`) is the stock
+architecture at 320, otherwise trained identically. Both were trained on
+a Colab GPU.
+
+**Anchors, verified on the built model before training:** 74.7% of the 3,439
+FPV drones are matchable (Sunny 61.9%, Cloudy 68.9%, Evening 93.9%), equal
+to the simulation in section 2. No size from 2% to 30% has zero coverage.
+Above ~14% coverage is lower than linear spacing (46–78%).
+
+**Split.** DJIFPV is three continuous videos, so a random split leaks
+near-duplicate frames. Each scenario is cut into 10 contiguous blocks:
+test = blocks 2 and 7, val = block 5, and 30 guard frames are dropped next
+to each held-out block (`tools/split_visiodect_fpv.py`). The test set has
+720 frames, 662 drones and 58 empty frames, with median apparent size 3.3%
+(full set 3.4%). A content-hash guard refuses training on any test image.
+
+**Results.** All rows measured in this repo, on the same 720 frames and
+the same 4-core CPU (`eval/config/fpv_test_*.yaml`, `eval.breakdown`).
+AP is threshold-independent; recall and false alarms are at 0.35.
+
+| Model | AP@0.5 | AP@[.5:.95] | AP small / medium | Recall @0.35 | Small recall @0.35 | False alarms, 58 empty frames | FPS |
+|---|---|---|---|---|---|---|---|
+| dut_v1 untiled | 0.0013 | 0.0002 | 0.0004 / 0.0089 | 0.181 | 0.171 | 190 per frame | 15.6 |
+| dut_v1 3×3 tiled | 0.1956 | 0.0561 | 0.0015 / 0.2905 | 0.369 | 0.165 | 300 per frame | 3.1 |
+| Stock 320, FPV-trained (control) | 0.7033 | 0.2583 | 0.5347 / 0.8205 | 0.000 | 0.000 | 0 (no detections at all) | 15.6 |
+| **Stride-8 640, FPV-trained** | **0.8627** | **0.4476** | 0.5685 / 0.9774 | **0.829** | **0.658** | **0 (THIN)** | **7.4** |
+
+No test drone is COCO-large (≥ 96² px). Stride-8's precision at 0.35 is
+0.888 (549 true / 69 false positives, all on frames that contain a drone).
+
+Per scenario, AP@0.5 (recall @0.35):
+
+| Scenario (drones) | dut_v1 untiled | dut_v1 tiled | Control | Stride-8 |
+|---|---|---|---|---|
+| Sunny (240) | 0.0037 | 0.5200 | 0.6696 (0.00) | 0.6541 (0.69) |
+| Cloudy (231) | 0.0005 | 0.0008 | 0.6401 (0.00) | 0.9772 (0.84) |
+| Evening (191) | 0.0011 | 0.0064 | 0.9198 (0.00) | 1.0000 (0.99) |
+
+By apparent size, AP@0.5 (stride-8 recall @0.35):
+
+| Apparent size | Drones | dut_v1 tiled | Control | Stride-8 |
+|---|---|---|---|---|
+| 0–2% | 100 | 0.0003 | 0.6612 | 0.9585 (0.83) |
+| 2–3% | 149 | 0.0101 | 0.6241 | 0.6595 (0.82) |
+| 3–4% | 268 | 0.0503 | 0.7393 | 0.9391 (0.75) |
+| 4–5% | 25 | 0.0075 | 0.9104 | 0.9600 (0.96) |
+| 5–7.5% | 120 | 1.0000 | 0.9754 | 1.0000 (1.00) |
+
+What this says:
+
+- **The architecture fix plus FPV training gives a detector that works on
+  this FPV footage**, where the deployed model gave noise (0.0013 → 0.863).
+- **Most of the gain is FPV training.** The control, with 0% of drones
+  anchor-matchable, reaches 0.703 of stride-8's 0.863. So section 2's 0%
+  meant *hard to learn*, not *unlearnable*: coverage measures difficulty,
+  not a hard limit.
+- **Stride-8 adds two things: the operating point and a real small-object
+  advantage.**
+  - *Operating point:* at the deployed 0.35 threshold the control detects
+    nothing (all its scores are lower); stride-8 finds 83% of drones.
+  - *Small objects:* the two size views disagree. By COCO pixel area the
+    AP-small gap is small (0.569 vs 0.535). By apparent size (share of the
+    frame, which is what the model's input sees and what sets range), it is
+    large: 0.96 vs 0.66 at 0–2% and 0.94 vs 0.74 at 3–4%. The apparent-size
+    view is the operationally relevant one. The COCO-small bucket mixes in
+    60 Sunny drones that are few pixels on 720×1280 frames but ≥3% of the
+    frame, so it mostly reflects the Sunny issue below.
+  - *Soft spot:* the 2–3% band is 0.66 overall, almost entirely from Sunny:
+    0.98 on Cloudy's 129 drones vs 0.10 on Sunny's 11.
+- **Stride-8 beats 3×3 tiling on both axes at once:** AP@0.5 0.86 vs 0.20
+  *and* 7.4 vs 3.1 FPS on this CPU. Tiling as a workaround for dut_v1 is
+  now obsolete. (Tiling *combined* with stride-8 remains an untested range
+  lever, section 4.)
+- **Sunny: a likely preprocessing artifact, to investigate.** Stride-8 sits
+  just under the control there (0.654 vs 0.670), with recall @0.35 of 0.39
+  on 3–4% drones. Every Sunny test frame is 720×1280 portrait, squeezed
+  into a square 640 input, which distorts the drone's shape relative to the
+  2400×1080 landscape frames the other scenarios use. The likely fix is an
+  aspect-preserving resize (letterboxing). That is a preprocessing issue to
+  investigate, not evidence of a fundamental weakness. It is untested, and
+  nothing has been fixed.
+- **Evening's perfect score has a narrow denominator.** AP 1.0000 / recall
+  0.99 comes from 240 frames: 191 drones and 49 empty frames from one clip.
+  Every drone is 3.0–4.2% of the frame (median 3.7%), inside stride-8's
+  best-covered band (93.9% anchor-matchable), with no COCO-small drone. It
+  is a narrow, easy subset: never quote the 1.00 without that context.
+- **Not real-time on CPU.** 7.4 FPS is 1.6× below the 12 FPS floor; the
+  stock 320 model runs at 15.6 FPS on the same machine. Nearly all of the cost is the
+  640 input. Deploying it needs a GPU or edge accelerator, or optimization.
+- **No false-alarm rate yet.** 0 false alarms on 58 empty frames, all from
+  these clips (none from Sunny), is a THIN figure. No rate will be stated
+  until real hard negatives (birds, planes, clutter) are collected in Fas 1.
+- **Range stays optics-bound.** The floor is ~2% apparent size: a 0.25 m
+  quad is matchable to ~9 m on a wide lens and ~40 m at 5× zoom
+  (section 4). The architecture fix moves the floor; it does not remove
+  the need for narrow optics at real engagement ranges.
+
 ## Caveats
 
 - **Narrow data.** One FPV airframe (DJI FPV, ~0.3 m), one phone camera
@@ -252,10 +365,13 @@ we have?**
 - **Speed not tested.** These are still frames. Motion blur at FPV speeds
   will make detection harder, not easier.
 - **Distances are estimates** from assumed optics (sections 1 and 4).
-- **Trained on DUT only.** dut_v1 never saw VisioDECT. A model trained on
-  FPV data would do better within its anchor limits, but not below them.
-- **License.** VisioDECT's license is UNVERIFIED (`docs/datasets.md`). It
-  is used here for measurement only, never for training.
+- **Trained on DUT only (sections 1–5).** dut_v1 never saw VisioDECT.
+  Section 6's models did, on held-out blocks of the *same* clips, so their
+  numbers are in-domain upper bounds.
+- **License.** VisioDECT's license is UNVERIFIED (`docs/datasets.md`).
+  Sections 1–5 use it for measurement only. Section 6 trains on it as a
+  research/feasibility experiment: those weights are research-only and
+  refused by `--commercial-only`.
 - **Latency is approximate.** It is only indicative: the full-set
   untiled run shared the CPU with other work, so speeds are quoted from
   the per-scenario runs.
@@ -297,3 +413,24 @@ is 0.002.** Even 6×-slower tiling only reaches drones covering ≥5% of the
 frame (~3.5 m on a wide lens), which is 21% of this already close-range
 footage. The stride-8 change (#23 option B, geometric scales) is a
 prerequisite, not an option.
+
+---
+
+**Verdict after the stride-8 experiment (#26): pass with constraints.**
+- **Capability:** on wide optics the stride-8 model trained on FPV data
+  recovers a real mid-range capability on this footage: AP@0.5 0.863 and
+  recall 0.83 at the operating threshold, on drones a median 3.3% of the
+  frame (~10 m on a phone lens). Most of it comes from FPV training; the
+  architecture adds a usable operating point and a real small-object
+  advantage by apparent size. It also makes 3×3 tiling obsolete, beating it on
+  AP and FPS at once.
+- **Not yet sellable:**
+  - it is not real-time on CPU (7.4 FPS, 1.6× below the 12 FPS floor);
+  - it is proven only in-domain on VisioDECT, not on our own data;
+  - no false-alarm rate can be stated until real hard negatives are collected;
+  - the weights are research-only (VisioDECT license UNVERIFIED);
+  - range is still set by the optics: ~9 m wide, ~40 m at 5× zoom for a 0.25 m quad.
+- **Optics requirement:** reaching operational ranges still needs a narrow
+  field of view (zoom, tiling or a cued narrow sensor) in addition to this model.
+- **Next:** temporal / motion-based detection is the next architecture track,
+  to be tested on own fixed-camera data in Fas 1 (DECISIONS #26).
