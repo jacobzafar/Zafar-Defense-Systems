@@ -1280,3 +1280,290 @@ or near-static background, which matches the fixed-object use case. It is NOT va
 public phone footage (VisioDECT), because temporal performance depends heavily on camera
 ego-motion and scene; it is to be tested against own data on the real fixed-camera setup in
 Fas 1.
+
+## 27. Sensor robustness and temporal tracking on FPV: Kalman tracker kept, the rest measured and deferred
+
+A measured experiment on top of #26's stride-8 model, which is unchanged
+and still reproduces (AP@0.5 0.8627, recall@0.35 0.829, 0/58 false
+alarms on `fpv_test_stride8.yaml`, re-run after every phase). The goal
+was (a) a detector that holds up across sensors and (b) more out of one
+sensor by using time. Range stays limited by pixels on target; nothing
+here changes that.
+
+**Scope of every number below:** feasibility on VisioDECT DJIFPV
+(research-only, license UNVERIFIED, `commercially_cleared: false`), on
+#26's frozen test blocks, which come from the *same* clips as training.
+No VisioDECT-derived data or weights are committed; only aggregate
+numbers are. The real validation is own data in January.
+
+**Protocol.** Every setting was chosen on val, never on test. Val is a
+new frozen set, `data/frozen_eval/visiodect-fpv-val`: the val block of
+each scenario, 360 frames, sha256 `a6215de2…`. It was also #26's
+early-stopping set, so its absolute numbers are optimistic. Each
+selection rule was written into its config before any result (see
+`eval/config/fpv_val_*.yaml`, `kalman_sweep_grid.yaml`,
+`kalman_prefer_grid.yaml`). Test was run once per chosen setting. A
+candidate that failed on val got no test run, not even for the record.
+
+### Phase 0: measurement, and a harness bug
+
+- **Bug, fixed (`369057a`).** `eval/harness.py` stored the tracker's
+  live `Track` objects for every frame. `IoUTracker` updates them in
+  place, so every frame ended up with the tracks' *final* positions. The
+  bug stayed hidden because continuity was unmeasurable on one-frame
+  sequences; no number reported before this entry is affected. The fix
+  snapshots the tracks per frame, and a regression test fails without it
+  (coverage 0.2 instead of 1.0).
+- **Clip view.** `sequence_grouping: filename_runs` (`eval/sequences.py`)
+  regroups the frozen test set into its 6 contiguous 120-frame clips
+  (Cloudy/Evening/Sunny × early/late) from the "(n)" frame numbers. It
+  doesn't touch `sequences.json`, so the checksum stays valid.
+  Detector and tracker reset at each clip boundary.
+- **Simulated sensors** (`detector/sensor_sim.py`, seeded per frame):
+  resolution, noise, motion blur, JPEG, tone/white balance, mono, a
+  thermal *appearance* proxy, and a synthetic shake variant (±2% iid
+  translation) with ground truth shifted along with the frame.
+- **New metric-card fields:**
+  - false positives on frames that contain a drone;
+  - recall by apparent size;
+  - track quality: coverage, frames to first track, fragmentation,
+    false track IDs;
+  - the tracker's returned boxes scored as system output
+    (`track_output`);
+  - tracker diagnostics;
+  - latency by stage.
+
+  Supporting tools: `eval/compare.py` renders tables from metric cards,
+  `eval/breakdown.py --by-sequence` reports per clip, and
+  `eval/bench_latency.py` times configs in interleaved rounds (single
+  passes vary by about 20% on this CPU).
+
+The detector across simulated sensors (test, operating point 0.35; the
+detector alone raises 0 false alarms on the 58 empty frames in every
+variant):
+
+| Variant | AP@0.5 | Recall | Precision | Recall 0–2% |
+|---|---|---|---|---|
+| Clean | 0.8627 | 0.829 | 0.888 | 0.83 |
+| Low-res ½ / ¼ | 0.8960 / 0.9193 | 0.837 / 0.813 | 0.916 / 0.926 | 0.79 / 0.72 |
+| Noise | 0.7853 | **0.443** | 0.867 | **0.05** |
+| Motion blur | 0.8856 | 0.781 | 0.910 | 0.57 |
+| JPEG q15 | 0.9140 | 0.772 | 0.950 | 0.47 |
+| Color / WB | 0.8448 | 0.808 | 0.887 | 0.78 |
+| Gray | 0.7992 | 0.763 | 0.831 | 0.79 |
+| Thermal proxy | **0.3510** | 0.127 | 0.988 | 0.00 |
+| Shake ±2% | 0.8491 | 0.794 | 0.879 | 0.78 |
+
+How to read the variants:
+
+- **Noise is the largest real weakness.**
+- **The thermal proxy is a zero result.** It is reported as such: real
+  IR needs real IR data, not inverted mono.
+- **The low-res variants are *not* range proxies.** The model resizes
+  every frame to 640 anyway, and on these frames they act as vertical
+  smoothing. Their AP gain, and an antialiasing hypothesis built on it,
+  did not replicate on val (Phase 1).
+
+### Phase 1 (A1): input normalization and preprocessing
+
+- `detector/input_norm.py` converts gray, single-channel, BGRA, 16-bit
+  (percentile stretch) and float frames to BGR8, and is a no-op for BGR8
+  input. Codecs and streams were already covered by `cv2.VideoCapture`
+  in `control/pipeline.py`.
+- **Adaptive (non-square) input: dropped before running.**
+  torchvision's `DefaultBoxGenerator` stretches anchors with the input
+  aspect: at 640×1408 the "square" anchor is 35×16 px.
+- **Letterbox: dropped.** Val AP fell 0.943 → 0.445 (Cloudy 1.00 →
+  0.33, Evening 0.88 → 0.18): wide frames lose pixels on target. It
+  didn't help Sunny either (0.948 → 0.924), which rejects #26's
+  aspect-artifact hypothesis for Sunny.
+- **`resize_interp: area`: opt-in, not default.** On val it tied the
+  baseline (AP 0.9431 vs 0.9432), so it failed the "≥" rule. It is 13%
+  faster (109.0 → 94.9 ms/frame, interleaved benchmark). Confirmed once
+  on test (AP 0.8598 vs 0.8627, recall@0.35 identical at 0.829), so it
+  is accuracy-neutral. This doesn't settle real-time, which is decided
+  on GPU and target hardware.
+- **Sunny's weakness is all in Sunny-late.** That clip's drones are
+  3.3% / 32×32 px: AP 0.460, recall at any score 0.908, recall@0.35
+  0.383. Sunny-early (5.9%) scores 1.000. The detector sees the drone,
+  just with a low score.
+
+### Phase 2 (A3): tiling at full resolution, dropped on val
+
+`tile_size` sets the tile grid per frame, so portrait and landscape
+frames both get sensible tiles. Both candidates failed the rule on val
+and were not run on test:
+
+| Val | AP@0.5 | Recall@0.35 | Recall 0–2% | FP / drone frame | False track IDs | FPS |
+|---|---|---|---|---|---|---|
+| Untiled | 0.9432 | 0.869 | 0.36 | 0.003 | 1 | 7.7 |
+| ≤640 px tiles + full frame | 0.7918 | 0.829 | 0.64 | 0.146 | 9 | 0.4 |
+| ≤960 px tiles + full frame | 0.8474 | 0.877 | **1.00** | 0.120 | 5 | 0.9 |
+
+Tiling does recover small drones (0–2%: 0.36 → 1.00 with 960 px tiles),
+but at about 40× the false positives and 8–19× the latency. The model
+was trained on whole frames squeezed to 640, so tiles show it drones and
+background texture 2–4× larger than anything it has seen; this
+mechanism is plausible but not verified. The gain only becomes usable
+with a model trained on tiles or at native scale, which is a January
+track. `tile_size` stays as a code option.
+
+### Phase 3 (B): Kalman tracker. Keep.
+
+`tracker/kalman_tracker.py` (`backend: kalman`, opt-in):
+
+- constant-velocity prediction compensated by camera motion;
+- size-scaled noise;
+- chi-square-gated centre matching (IoU fails for small, fast drones);
+- two-stage association: low scores extend tracks but never start them;
+- M-of-N confirmation;
+- no coasting ghost boxes.
+
+Camera motion comes from `tracker/ego_motion.py`: LK flow at reduced
+resolution plus a RANSAC similarity, with an explicit failure flag. A
+failed estimate widens the gate instead of being trusted as "no
+motion".
+
+Parameters were chosen on val clean and val shake with
+`eval/track_sweep.py`: a 192-config grid over cached detections, with
+replay verified identical to the harness for the IoU tracker. The
+chosen config: ego-motion on, low threshold 0.05, `confirm_hits` 1, no
+coasting boxes shown, `vel_std` 0.025.
+
+Test, every box the tracker returns scored like a detection (IoU 0.5).
+Each cell is recall / precision:
+
+| Variant | Detector alone @0.35 | Old IoU tracker | **Kalman** | Continuity, IoU → Kalman |
+|---|---|---|---|---|
+| Clean | 0.829 / 0.888 | 0.846 / 0.187 | **0.882 / 0.890** | 0.764 → 0.822 |
+| Shake ±2% | 0.794 / 0.879 | 0.812 / 0.097 | **0.877 / 0.881** | **0.330 → 0.785** |
+| Noise | 0.443 / 0.867 | 0.492 / 0.187 | **0.624 / 0.839** | 0.911 → 0.927 |
+| Motion blur | 0.781 / 0.910 | 0.822 / 0.186 | 0.885 / 0.900 | 0.789 → 0.841 |
+| JPEG q15 | 0.772 / 0.950 | 0.817 / 0.205 | 0.906 / 0.943 | 0.817 → 0.840 |
+| Color / WB | 0.808 / 0.887 | 0.826 / 0.188 | 0.873 / 0.878 | 0.770 → 0.832 |
+| Gray | 0.763 / 0.831 | 0.779 / 0.166 | 0.817 / 0.826 | 0.766 → 0.834 |
+| Thermal proxy | 0.127 / 0.988 | 0.177 / 0.880 | 0.184 / 0.819 | – |
+
+- **Against the detector alone:** higher recall at about the same
+  precision. On clean frames that is +5.3 points at 0.890 vs 0.888, and
+  0–2% recall rises 0.83 → 0.98. Under noise the low-score continuation
+  adds 18 points. On some variants precision is 0.005–0.03 lower, and on
+  the thermal proxy 0.17 lower (0.988 → 0.819, on very few boxes).
+- **Against the old IoU tracker:** false alarms on the 58 empty frames
+  drop from 77 to 0. That comparison is with the old IoU tracker's
+  *output*, which coasts stale boxes for 15 frames: 3.6 ghost boxes per
+  drone frame and precision 0.187. The detector alone already raised 0
+  false alarms there. Kalman raises 0 on every variant and creates 0
+  false track IDs.
+- **Under shake** continuity holds: 0.785 against the IoU tracker's
+  0.330. The sharpest drop under shake was the tracker's, not the
+  detector's.
+- **Cost:** 5.1 ms/frame including ego-motion, against about 145 ms for
+  the detector.
+
+**Sunny-late, reported separately:**
+
+| Sunny-late | Recall | Precision | ID switches |
+|---|---|---|---|
+| Detector alone @0.35 | 0.383 | – | – |
+| Old IoU tracker | 0.392 | 0.047 | 61 |
+| Kalman | 0.425 | 0.432 | 0 |
+
+- **Ego-motion fails in 119 of 119 frames on Sunny-late.** The frames
+  are clean blue sky, and the only corner in the image is the drone, so
+  camera motion cannot be observed from the image at all.
+- **Phase 0's "hard pan of 12.9% per 10 frames" for this clip is
+  retracted.** It came from phase correlation on a featureless sky.
+- **Why recall stays low (a diagnostic replay, nothing tuned):** all 67
+  "false" boxes lie within 1.5 body lengths of the drone, and none lie
+  elsewhere. In 58 frames a box with IoU ≥ 0.5 existed, but the track
+  took a poorly placed neighbouring box. So this is a box-choice
+  problem, not a lost track.
+
+**Ego-motion failures per clip (test, clean):**
+
+- Cloudy-early 0/119, Cloudy-late 2/119;
+- Evening-early 46/119, Evening-late 0/119;
+- Sunny-early 0/119, Sunny-late 119/119.
+
+On val, Cloudy failed in 60/119 frames because a flat sky leaves too few
+corners. There, the failure widening (2% of frame width, i.e. 48 px)
+made predictions worse than no compensation (median innovation 0.93 vs
+0.31 box sizes), when the real shift was about 3 px. The grid was fixed
+in advance, so this was not tuned.
+
+**Product insight:** image-based ego-motion fails exactly where small
+drones are usually seen, against empty sky. A deployed PTZ or gimbal
+mount already knows its own pan, tilt and zoom (IMU and encoders), and
+that telemetry should drive the camera-motion compensation instead. The
+tracker's `apply_camera_motion` already takes an external motion
+estimate.
+
+**Selection side notes:**
+
+- **M-of-N confirmation (`confirm_hits` 2–3) lost on val.** With 0
+  detector false alarms at 0.35 and only 10 empty val frames, it can
+  only cost recall here. Its real purpose, suppressing birds and
+  clutter, cannot be measured without hard negatives.
+- **Kalman still switches IDs often on Cloudy** (33 and 42 per 120
+  frames). This is open.
+
+**`prefer: score`: opt-in, not validated (`24be937`).** This targets
+the Sunny-late box-choice problem: pick the highest-scoring box in the
+gate instead of the nearest. Val could not decide it. Across 360 val
+frames a track had more than one box in its gate once, and there the
+nearest box was also the best-scored, so both options score
+identically. It was not run on test: that would be test-driven
+selection, and even a result labelled "unvalidated" would bias the
+decision once seen. The default stays `distance`.
+
+### A2: sensor augmentation recipe. PREPARED, NOT RUN.
+
+`augment: sensor_dg` in `detector/train.py`
+(`sensor_sim.sample_sensor_dg`) applies random, size-preserving sensor
+ops per training image, with no polarity inversion.
+`config/stride8_fpv_sensor_dg.yaml` is #26's config plus this recipe.
+It was not trained: there is no GPU here, and by decision the retrain
+belongs to own data in January. **Caveat:** the recipe's families
+overlap the eval variants, so a model trained with it would look better
+on them partly by construction. Real cross-sensor generalization must be
+measured on footage from other, real cameras.
+
+### Verdicts
+
+| Track | Verdict |
+|---|---|
+| Harness bug fix + Phase 0 measurement | **Keep** |
+| Input normalization (`input_norm`) | **Keep**; functional, no accuracy claim |
+| Letterbox / adaptive | **Drop** for this model; letterbox only with a retrain (January) |
+| `resize_interp: area` | **Opt-in latency option**; accuracy-neutral on val and test, not default |
+| Tiling (`tile_size`) | **Drop**; code option kept; tile-trained model in January |
+| **Kalman tracker + ego-motion** | **Keep. This is the temporal deliverable.** Opt-in backend; the default stays `iou` until own data confirms it |
+| `prefer: score` | **Opt-in, not validated**; to January |
+| Motion cue + fusion | **Deferred to January**, not built. On this featureless-sky data they cannot be validated: frame differencing needs the same ego-motion that fails on the same frames, and their false-alarm cost needs hard negatives |
+| A2 `sensor_dg` | **PREPARED, NOT RUN**; to January |
+
+### January plan (own data, the real validation)
+
+1. Own footage with hard negatives (birds, clouds, camera shake) to
+   measure temporal false-alarm cost and the value of `confirm_hits`.
+   Birds and clouds are unmeasured here.
+2. Camera-motion compensation from PTZ/gimbal telemetry instead of
+   images; then motion cue and fusion on the fixed or PTZ setup.
+3. Validate `prefer: score` on own sky footage with small drones.
+4. Retrain on own data: `sensor_dg`, letterbox, and tile- or
+   native-scale training for small objects and range without the
+   false-positive explosion.
+5. Cross-sensor generalization on real other cameras, including real IR.
+6. Real-time on GPU and target hardware (`area` is available as opt-in).
+7. Open threads:
+   - Cloudy ID switches;
+   - scaling the ego-failure gate widening to recent motion instead of a
+     fixed 2% of width;
+   - wiring `kalman` into the CLI, UI and presets (the live detector
+     threshold must then be the tracker's `low_threshold`).
+
+Reproduce with the commits `369057a`, `668e5b9`, `6bc9647`, `e88262f`,
+`24be937`, `af03e0e`, and the configs named above:
+`python -m eval.harness --config …`, `python -m eval.track_sweep …`,
+`python -m eval.compare --tracks …`.
