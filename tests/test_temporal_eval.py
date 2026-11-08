@@ -253,3 +253,18 @@ def test_bench_latency_times_every_detector_every_round():
     results = bench({"a": a, "b": b}, images=[None] * 4, rounds=3, warmup=2)
     assert a.calls == b.calls == 2 + 4 * 3
     assert set(results) == {"a", "b"} and results["a"]["median_ms"] >= 0
+
+
+def test_sensor_dg_recipes_are_seeded_size_preserving_and_never_invert():
+    from detector.sensor_sim import sample_sensor_dg
+
+    image = np.random.default_rng(1).integers(0, 255, (48, 64, 3), dtype=np.uint8)
+    recipes = [sample_sensor_dg(np.random.default_rng(seed)) for seed in range(200)]
+    assert sample_sensor_dg(np.random.default_rng(7)) == recipes[7]
+    assert all(op["op"] != "invert" for recipe in recipes for op in recipe)
+    assert {op["op"] for recipe in recipes for op in recipe} == {
+        "color", "gray", "resize", "motion_blur", "gaussian_blur", "noise", "jpeg"
+    }
+    for seed, recipe in enumerate(recipes[:50]):
+        out = apply_sensor(image, recipe, np.random.default_rng(seed))
+        assert out.shape == image.shape and out.dtype == np.uint8

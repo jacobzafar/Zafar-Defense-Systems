@@ -124,6 +124,7 @@ class TrainConfig:
     architecture: str = "ssdlite"  # "ssdlite" (stock, 6 levels) or "ssdlite_stride8" (detector/ssdlite_stride8.py)
     anchor_scales: list[float] | None = None  # ssdlite_stride8 only: 8 scales; None = its GEOMETRIC_SCALES
     hflip_prob: float = 0.0  # per-image horizontal-flip probability during training (0 = no augmentation)
+    augment: str | None = None  # "sensor_dg": random simulated-sensor ops per image (detector/sensor_sim.py)
     leakage_guard_eval_dirs: list[str] = field(default_factory=list)  # frozen eval sets no train/val image may be in
     early_stopping_patience: int | None = None  # stop after this many epochs without a new best val AP@0.5
     device: str = "auto"  # "auto" = cuda if torch.cuda.is_available() else cpu; any other value is used as-is
@@ -213,10 +214,15 @@ class _DroneTrainingDataset(Dataset):
     handling described above.
     """
 
-    def __init__(self, samples: list[ImageSample], target_class: str, hflip_prob: float = 0.0) -> None:
+    def __init__(
+        self, samples: list[ImageSample], target_class: str, hflip_prob: float = 0.0, augment: str | None = None
+    ) -> None:
+        if augment not in AUGMENTATIONS:
+            raise ValueError(f"augment must be one of {AUGMENTATIONS}, got {augment!r}")
         self.samples = samples
         self.target_class = target_class
         self.hflip_prob = hflip_prob
+        self.augment = augment
 
     def __len__(self) -> int:
         return len(self.samples)
@@ -224,6 +230,8 @@ class _DroneTrainingDataset(Dataset):
     def __getitem__(self, index: int):
         sample = self.samples[index]
         image = Image.open(sample.image_path).convert("RGB")
+        if self.augment == "sensor_dg":
+            image = _sensor_dg(image)
         image_tensor = to_tensor(image)
 
         boxes = [[b.x1, b.y1, b.x2, b.y2] for b in sample.boxes if b.category == self.target_class]
@@ -242,6 +250,24 @@ class _DroneTrainingDataset(Dataset):
             )
 
         return image_tensor, {"boxes": boxes_tensor, "labels": labels_tensor}
+
+
+AUGMENTATIONS = (None, "sensor_dg")
+
+
+def _sensor_dg(image):
+    """Random simulated sensor (detector/sensor_sim.sample_sensor_dg) on a
+    PIL RGB image; same size out, so box targets are unchanged. Drawn from
+    Python's `random`, so it follows the run's seed like hflip does."""
+    import cv2
+    import numpy as np
+
+    from detector.sensor_sim import apply_sensor, sample_sensor_dg
+
+    rng = np.random.default_rng(random.getrandbits(64))
+    bgr = cv2.cvtColor(np.asarray(image), cv2.COLOR_RGB2BGR)
+    out = apply_sensor(bgr, sample_sensor_dg(rng), rng)
+    return Image.fromarray(cv2.cvtColor(out, cv2.COLOR_BGR2RGB))
 
 
 def _collate(batch):
@@ -342,7 +368,7 @@ def epoch_weights_filename(epoch: int) -> str:
 # paths (mount points differ between Colab sessions and local machines).
 _RESUME_MUST_MATCH = (
     "target_class", "val_fraction", "batch_size", "learning_rate", "grad_clip_max_norm", "seed", "input_size",
-    "architecture", "anchor_scales", "hflip_prob",
+    "architecture", "anchor_scales", "hflip_prob", "augment",
 )
 
 # Mirrors DroneDetector's default nms_thresh (detector/drone_detector.py)
@@ -530,7 +556,7 @@ def train(config: TrainConfig) -> dict[str, Any]:
     _freeze_batchnorm(model)
 
     train_loader = DataLoader(
-        _DroneTrainingDataset(train_samples, config.target_class, config.hflip_prob),
+        _DroneTrainingDataset(train_samples, config.target_class, config.hflip_prob, config.augment),
         batch_size=config.batch_size,
         shuffle=True,
         collate_fn=_collate,

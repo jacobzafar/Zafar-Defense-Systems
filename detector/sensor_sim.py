@@ -154,3 +154,40 @@ def apply_shake(image, rng: np.random.Generator, amplitude_frac: float):
     dx, dy = (int(round(v)) for v in rng.uniform(-amp, amp, size=2))
     matrix = np.float32([[1, 0, dx], [0, 1, dy]])
     return cv2.warpAffine(image, matrix, (w, h), borderMode=cv2.BORDER_REPLICATE), (dx, dy)
+
+
+# Training-time domain randomization (DECISIONS #27, A2: PREPARED, NOT RUN).
+# Each op is applied independently with its probability, parameters drawn
+# per image. Every op keeps the image size (resize restores), so box
+# targets need no change. No `invert`: polarity-flipped visible light is
+# not thermal, and real IR needs real IR training data.
+# CAVEAT: these op families overlap the eval variants
+# (eval/config/fpv_test_stride8_sim_*.yaml), so a model trained with this
+# recipe will look better on those variants partly by construction; real
+# cross-sensor generalization must be measured on footage from other
+# cameras.
+SENSOR_DG_PROBS = {"resize": 0.3, "noise": 0.3, "motion_blur": 0.2, "gaussian_blur": 0.1, "jpeg": 0.3, "color": 0.5, "gray": 0.15}
+
+
+def sample_sensor_dg(rng: np.random.Generator) -> list[dict[str, Any]]:
+    """One random simulated-sensor recipe for a training image."""
+    ops: list[dict[str, Any]] = []
+
+    def maybe(name: str) -> bool:
+        return bool(rng.random() < SENSOR_DG_PROBS[name])
+
+    if maybe("color"):
+        ops.append({"op": "color", "gamma": float(rng.uniform(0.6, 1.8)), "wb": [float(v) for v in rng.uniform(0.75, 1.25, 3)]})
+    if maybe("gray"):
+        ops.append({"op": "gray"})
+    if maybe("resize"):
+        ops.append({"op": "resize", "scale": float(rng.uniform(0.35, 1.0)), "restore": True})
+    if maybe("motion_blur"):
+        ops.append({"op": "motion_blur", "length_frac": float(rng.uniform(0.001, 0.006))})
+    if maybe("gaussian_blur"):
+        ops.append({"op": "gaussian_blur", "sigma_frac": float(rng.uniform(0.0003, 0.0015))})
+    if maybe("noise"):
+        ops.append({"op": "noise", "read_sigma": float(rng.uniform(1.0, 10.0)), "shot": float(rng.uniform(0.0, 0.6))})
+    if maybe("jpeg"):
+        ops.append({"op": "jpeg", "quality": int(rng.integers(15, 96))})
+    return ops

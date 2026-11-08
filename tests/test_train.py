@@ -352,3 +352,39 @@ def test_resume_refuses_a_different_input_size_but_treats_old_checkpoints_as_320
     torch.save(checkpoint, checkpoint_path)
     report = train(TrainConfig(**base, epochs=2))
     assert report["resumed_from_epoch"] == 1
+
+
+def test_sensor_dg_augment_keeps_image_size_and_boxes(synthetic_drone_dataset):
+    import random
+
+    import torch
+
+    from detector.datasets.loader import load_manifest_dataset
+    from detector.train import _DroneTrainingDataset
+
+    samples = load_manifest_dataset(synthetic_drone_dataset)
+    plain = _DroneTrainingDataset(samples, "drone")
+    augmented = _DroneTrainingDataset(samples, "drone", augment="sensor_dg")
+    random.seed(0)
+    for i in range(len(samples)):
+        (img_a, tgt_a), (img_b, tgt_b) = plain[i], augmented[i]
+        assert img_a.shape == img_b.shape
+        assert torch.equal(tgt_a["boxes"], tgt_b["boxes"])
+
+
+def test_unknown_augment_is_rejected(synthetic_drone_dataset):
+    from detector.datasets.loader import load_manifest_dataset
+    from detector.train import _DroneTrainingDataset
+
+    with pytest.raises(ValueError, match="augment"):
+        _DroneTrainingDataset(load_manifest_dataset(synthetic_drone_dataset), "drone", augment="mixup")
+
+
+def test_prepared_sensor_dg_config_loads_and_differs_from_stride8_only_where_intended():
+    from detector.train import TrainConfig
+
+    base = TrainConfig.from_yaml("config/stride8_fpv.yaml")
+    dg = TrainConfig.from_yaml("config/stride8_fpv_sensor_dg.yaml")
+    differing = {k for k in base.__dataclass_fields__ if getattr(base, k) != getattr(dg, k)}
+    assert differing == {"augment", "output_dir", "purpose"}
+    assert dg.augment == "sensor_dg" and dg.commercial_only is False
