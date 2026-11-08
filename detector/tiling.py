@@ -33,3 +33,15 @@ def tile_grid(width: int, height: int, rows: int, cols: int, overlap: float) -> 
         return result
 
     return [(x1, y1, x2, y2) for (y1, y2) in spans(height, rows) for (x1, x2) in spans(width, cols)]
+
+
+def tiles_for_size(length: int, tile_size: int, overlap: float) -> int:
+    """Fewest tiles along one axis of `length` px such that each tile (as
+    tile_grid sizes them, overlapping by `overlap`) is at most `tile_size` px.
+    Lets one config tile landscape and portrait frames alike (DECISIONS #27)."""
+    if tile_size < 1:
+        raise ValueError(f"tile_size must be >= 1, got {tile_size}")
+    count = 1
+    while length / (count - (count - 1) * overlap) > tile_size:
+        count += 1
+    return count

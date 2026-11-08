@@ -85,6 +85,7 @@ class DroneDetector(BaseDetector):
         tile_cols: int = 1,
         tile_overlap: float = 0.2,
         tile_include_full_frame: bool = True,
+        tile_size: int | None = None,
         input_size: int = 320,
         architecture: str = "ssdlite",
         anchor_scales: list[float] | None = None,
@@ -170,6 +171,9 @@ class DroneDetector(BaseDetector):
         self.tile_cols = tile_cols
         self.tile_overlap = tile_overlap
         self.tile_include_full_frame = tile_include_full_frame
+        # tile_size (px): rows/cols chosen per frame so tiles are at most this
+        # big — overrides tile_rows/tile_cols (DECISIONS #27).
+        self.tile_size = tile_size
 
     def warmup(self) -> None:
         dummy = torch.zeros(3, self.input_size, self.input_size, dtype=torch.uint8)
@@ -212,7 +216,13 @@ class DroneDetector(BaseDetector):
         )
 
     def _run_model(self, rgb, width: int, height: int) -> dict:
-        if self.tile_rows * self.tile_cols == 1:
+        rows, cols = self.tile_rows, self.tile_cols
+        if self.tile_size is not None:
+            from detector.tiling import tiles_for_size
+
+            rows = tiles_for_size(height, self.tile_size, self.tile_overlap)
+            cols = tiles_for_size(width, self.tile_size, self.tile_overlap)
+        if rows * cols == 1:
             tensor, mapping = self._prepare(rgb)
             with torch.no_grad():
                 out = self._model([self._preprocess(tensor)])[0]
@@ -222,7 +232,7 @@ class DroneDetector(BaseDetector):
 
         from detector.tiling import tile_grid
 
-        crops = tile_grid(width, height, self.tile_rows, self.tile_cols, self.tile_overlap)
+        crops = tile_grid(width, height, rows, cols, self.tile_overlap)
         if self.tile_include_full_frame:
             crops = [(0, 0, width, height)] + crops
         prepared = [self._prepare(rgb[y1:y2, x1:x2]) for (x1, y1, x2, y2) in crops]

@@ -208,3 +208,18 @@ def test_invalid_preprocess_options_are_rejected(trained_weights_path):
         DroneDetector(weights_path=str(trained_weights_path), preprocess="adaptive")
     with pytest.raises(ValueError, match="resize_interp"):
         DroneDetector(weights_path=str(trained_weights_path), resize_interp="lanczos")
+
+
+def test_tile_size_grids_portrait_and_landscape_frames_per_frame(trained_weights_path):
+    import numpy as np
+
+    from detector.tiling import tile_grid, tiles_for_size
+
+    detector = DroneDetector(weights_path=str(trained_weights_path), confidence_threshold=0.0, tile_size=100)
+    fake = _FakeTileModel()
+    detector._model = fake
+    for h, w in ((120, 300), (300, 120)):
+        detector.detect(np.zeros((h, w, 3), np.uint8))
+        rows, cols = tiles_for_size(h, 100, 0.2), tiles_for_size(w, 100, 0.2)
+        expected = [(h, w)] + [(y2 - y1, x2 - x1) for x1, y1, x2, y2 in tile_grid(w, h, rows, cols, 0.2)]
+        assert fake.crop_shapes == expected
