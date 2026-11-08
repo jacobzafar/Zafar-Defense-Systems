@@ -1,0 +1,17 @@
+# eval/track_sweep.py grid — docs/DECISIONS.md #27 Phase 3: Kalman tracker alone, chosen ON VAL (never test).
+# Replayed on fpv_val_stride8_squeeze_bilinear.yaml (clean) and fpv_val_stride8_shake.yaml.
+# Selection rule, fixed before any sweep result:
+#   score = mean over the two sets of F1 of the tracker's returned boxes (IoU 0.5, every returned box counts);
+#   a candidate is eligible only if it raises no false alarm on val's 10 empty frames in either set
+#   (the detector alone raises 0 there at 0.35; THIN, 10 frames);
+#   ties broken by fewer false track IDs. The IoU tracker (current default) is the comparison row.
+# Grid values are fixed here and not extended after seeing results.
+grids:
+  - backend: [iou]
+  - backend: [kalman]
+    ego_motion: [true, false]
+    low_threshold: [0.05, 0.1, 0.2, 0.35]
+    confirm_hits: [1, 2, 3]
+    confirm_window: [3, 5]
+    max_coast_output: [0, 2]
+    vel_std: [0.00625, 0.025]

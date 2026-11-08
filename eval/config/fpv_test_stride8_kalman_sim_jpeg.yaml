@@ -1,0 +1,27 @@
+# eval/harness.py config — docs/DECISIONS.md #27 Phase 0: stride-8 baseline (#26 model, unchanged; RESEARCH ONLY)
+# on the frozen FPV test set, regrouped into its 6 contiguous clips (eval/sequences.py).
+# Variant: JPEG re-encode at quality 15.
+# Parameters fixed before any result; not tuned.
+# Phase 3: same as fpv_test_stride8_sim_jpeg.yaml with the Kalman tracker alone (tracker/kalman_tracker.py),
+# parameters chosen on val by eval/track_sweep.py (grid and rule: eval/config/kalman_sweep_grid.yaml).
+# Run once on test. confirm_window has no effect with confirm_hits 1 (tied on val, first kept).
+eval_set_dir: data/frozen_eval/visiodect-fpv-test
+detector:
+  backend: drone
+  weights_path: models/stride8_fpv/weights_best.pt
+  input_size: 640
+  architecture: ssdlite_stride8
+  anchor_scales: [0.025, 0.042036, 0.070682, 0.118848, 0.199836, 0.336014, 0.564989, 0.95]
+  confidence_threshold: 0.35
+  nms_thresh: 0.45
+tracker: {backend: kalman, ego_motion: true, low_threshold: 0.05, confirm_hits: 1, confirm_window: 3, max_coast_output: 0,
+  vel_std: 0.025}
+iou_threshold: 0.5
+small_object_area_px: 1024.0
+expected_checksum: ce85b0d59a7e276df11dc4836a85cab6f81915e4e7afc28d8c0ec4b18b3b4bab
+output_json_path: eval/output/fpv_test_stride8_kalman_sim_jpeg_metric_card.json
+output_report_path: eval/output/fpv_test_stride8_kalman_sim_jpeg_REPORT.md
+output_predictions_path: data/eval_predictions/fpv_test_stride8_kalman_sim_jpeg.jsonl.gz
+sequence_grouping: filename_runs
+sensor_sim:
+- {op: jpeg, quality: 15}

@@ -136,6 +136,11 @@ class MetricCard:
     false_positives_on_target_frames: dict[str, Any] = field(default_factory=dict)
     recall_by_apparent_size: dict[str, Any] = field(default_factory=dict)
     track_quality: dict[str, Any] = field(default_factory=dict)
+    # The tracker's returned boxes scored as the system's output (see
+    # track_output_metrics), and per-sequence tracker diagnostics (e.g.
+    # ego-motion failures) when the tracker offers them.
+    track_output: dict[str, Any] = field(default_factory=dict)
+    tracker_diagnostics: dict[str, Any] = field(default_factory=dict)
     latency_by_stage: dict[str, dict[str, float]] = field(default_factory=dict)
     sequence_grouping: str = "none"
     sensor_sim: list[dict[str, Any]] | None = None
@@ -189,6 +194,7 @@ def run_evaluation(config: EvalConfig) -> MetricCard:
     latencies_ms: list[float] = []
     stage_ms: dict[str, list[float]] = {}
     tracks_by_sequence: dict[str, list[list]] = {}
+    tracker_diagnostics: dict[str, Any] = {}
     evaluated_sequences = []
 
     for sequence in sequences:
@@ -231,12 +237,29 @@ def run_evaluation(config: EvalConfig) -> MetricCard:
                 )
             )
 
-            tracks = tracker.update(at_operating_point(detections))
+            # A tracker with `min_detection_score` (e.g. kalman's low threshold)
+            # gets the detections down to that score instead of only the
+            # operating point; one with `observe_frame` gets the frame first.
+            start = time.perf_counter()
+            observe = getattr(tracker, "observe_frame", None)
+            if callable(observe):
+                observe(image)
+            min_score = getattr(tracker, "min_detection_score", None)
+            tracker_input = (
+                [d for d in detections if d.confidence >= min_score]
+                if min_score is not None
+                else at_operating_point(detections)
+            )
+            tracks = tracker.update(tracker_input)
+            stage_ms.setdefault("tracker", []).append((time.perf_counter() - start) * 1000.0)
             # Snapshot: trackers update Track objects in place, so storing the
             # live objects would give every frame the tracks' final positions.
             per_frame_tracks.append([copy.copy(track) for track in tracks])
 
         tracks_by_sequence[sequence.sequence_id] = per_frame_tracks
+        diagnostics = getattr(tracker, "diagnostics", None)
+        if callable(diagnostics):
+            tracker_diagnostics[sequence.sequence_id] = diagnostics()
         evaluated_sequences.append(replace(sequence, frames=evaluated_frames))
 
     if config.output_predictions_path:
@@ -288,6 +311,8 @@ def run_evaluation(config: EvalConfig) -> MetricCard:
         false_positives_on_target_frames=fp_on_target,
         recall_by_apparent_size=recall_by_apparent_size,
         track_quality=track_quality,
+        track_output=track_output_metrics(evaluated_sequences, tracks_by_sequence, config.iou_threshold),
+        tracker_diagnostics=tracker_diagnostics,
         latency_by_stage={stage: compute_latency_stats(values) for stage, values in stage_ms.items()},
         sequence_grouping=config.sequence_grouping,
         sensor_sim=config.sensor_sim,
@@ -312,6 +337,49 @@ def simulate_sensor(image, frame, config: EvalConfig):
         frame = replace(frame, boxes=[_shift_box(b, dx * sx, dy * sy, frame.width, frame.height) for b in frame.boxes])
         frame = replace(frame, boxes=[b for b in frame.boxes if b.area > 0])
     return image, frame
+
+
+def track_output_metrics(
+    sequences: list, tracks_by_sequence: dict[str, list[list]], iou_threshold: float = 0.5
+) -> dict[str, Any]:
+    """The tracker's returned boxes, scored as what an operator would see:
+    every returned track is a prediction (no further cutoff), matched to GT
+    at `iou_threshold` like a detection. Recall/precision, false positives
+    on drone frames, false alarms on empty frames, recall by apparent size,
+    and recall/precision per sequence. Empty when every sequence has one
+    frame (a tracker's output then says nothing beyond the detector's)."""
+    if not any(len(s.frames) > 1 for s in sequences):
+        return {}
+    frames, sizes, per_sequence = [], [], {}
+    for sequence in sequences:
+        seq_frames = []
+        for frame, tracks in zip(sequence.frames, tracks_by_sequence.get(sequence.sequence_id, [])):
+            seq_frames.append(
+                FrameEvalData(
+                    frame_id=f"{sequence.sequence_id}#{frame.frame_index}",
+                    gt_boxes=frame.gt_drone_boxes,
+                    pred_boxes=[
+                        PredBox(t.x1 * frame.width, t.y1 * frame.height, t.x2 * frame.width, t.y2 * frame.height, t.confidence)
+                        for t in tracks
+                    ],
+                )
+            )
+            sizes.append((frame.width, frame.height))
+        frames += seq_frames
+        op = compute_recall_at_threshold(seq_frames, None, iou_threshold=iou_threshold)
+        per_sequence[sequence.sequence_id] = {
+            "recall": op["recall"],
+            "precision": op["precision"],
+            "num_gt_boxes": op["num_gt_boxes"],
+            "num_false_positives": op["num_false_positives"],
+        }
+    return {
+        "operating_point": compute_recall_at_threshold(frames, None, iou_threshold=iou_threshold),
+        "false_positives_on_target_frames": compute_fp_on_target_frames(frames, iou_threshold=iou_threshold),
+        "false_alarm_rate": compute_false_alarm_rate(frames),
+        "recall_by_apparent_size": summarize_by_apparent_size(normalized_frames(frames, sizes), None),
+        "per_sequence": per_sequence,
+    }
 
 
 def _shift_box(box, dx: float, dy: float, width: int, height: int):

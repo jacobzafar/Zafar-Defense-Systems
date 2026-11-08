@@ -1,0 +1,20 @@
+# eval/harness.py config — docs/DECISIONS.md #27 Phase 3: val with synthetic shake (same +-2% iid translation as
+# fpv_test_stride8_shake.yaml), so tracker parameters are not chosen for a steady camera only. Val, never test.
+eval_set_dir: data/frozen_eval/visiodect-fpv-val
+detector:
+  backend: drone
+  weights_path: models/stride8_fpv/weights_best.pt
+  input_size: 640
+  architecture: ssdlite_stride8
+  anchor_scales: [0.025, 0.042036, 0.070682, 0.118848, 0.199836, 0.336014, 0.564989, 0.95]
+  confidence_threshold: 0.35
+  nms_thresh: 0.45
+tracker: {backend: iou}
+iou_threshold: 0.5
+small_object_area_px: 1024.0
+expected_checksum: a6215de2fbb48177cbc263851ae732c118bacec2e67a96ae31c1b0b222c710a2
+output_json_path: eval/output/fpv_val_stride8_shake_metric_card.json
+output_report_path: eval/output/fpv_val_stride8_shake_REPORT.md
+output_predictions_path: data/eval_predictions/fpv_val_stride8_shake.jsonl.gz
+sequence_grouping: filename_runs
+shake: {amplitude_frac: 0.02, seed: 0}

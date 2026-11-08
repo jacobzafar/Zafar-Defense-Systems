@@ -19,11 +19,16 @@ def build_tracker(config: dict[str, Any] | None = None) -> BaseTracker:
             min_hits_to_confirm=config.get("min_hits_to_confirm", 1),
         )
 
+    if backend == "kalman":
+        from tracker.kalman_tracker import KalmanTracker
+
+        return KalmanTracker(**{k: v for k, v in config.items() if k != "backend"})
+
     if backend == "bytetrack":
         from tracker.bytetrack_adapter import ByteTrackAdapter
 
         return ByteTrackAdapter()
 
     raise ValueError(
-        f"Unknown tracker backend '{backend}'. Valid options: iou, bytetrack."
+        f"Unknown tracker backend '{backend}'. Valid options: iou, kalman, bytetrack."
     )

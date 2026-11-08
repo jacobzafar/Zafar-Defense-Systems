@@ -104,6 +104,10 @@ class Pipeline:
                     detector_ms = (time.perf_counter() - detect_start) * 1000.0
 
                     track_start = time.perf_counter()
+                    # Trackers that estimate camera motion (tracker/kalman_tracker.py) need the frame.
+                    observe = getattr(self.tracker, "observe_frame", None)
+                    if callable(observe):
+                        observe(frame)
                     tracks = self.tracker.update(detections)
                     tracker_ms = (time.perf_counter() - track_start) * 1000.0
 

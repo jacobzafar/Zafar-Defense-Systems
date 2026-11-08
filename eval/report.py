@@ -157,6 +157,36 @@ def _extended_sections(metric_card: "MetricCard", fmt) -> list[str]:
             f"- Track IDs that never matched GT (false alerts): {tq['num_false_track_ids']}",
             "",
         ]
+    out = metric_card.track_output
+    if out:
+        op, fa = out["operating_point"], out["false_alarm_rate"]
+        lines += [
+            "## Tracker output (system view)",
+            "",
+            "Every box the tracker returns, scored like a detection (IoU "
+            f"{op['iou_threshold']}, no further cutoff): recall {fmt(op['recall'])} ({op['num_true_positives']}/{op['num_gt_boxes']}), "
+            f"precision {fmt(op['precision'])}, {out['false_positives_on_target_frames']['num_false_positives']} false boxes on drone frames, "
+            f"{fa['num_false_alarms']} on {fa['num_hard_negative_frames']} empty frames.",
+            "",
+            "| Sequence | Recall | Precision | False boxes |",
+            "|---|---|---|---|",
+            *(f"| {sid} | {fmt(s['recall'])} | {fmt(s['precision'])} | {s['num_false_positives']} |" for sid, s in out["per_sequence"].items()),
+            "",
+        ]
+    if metric_card.tracker_diagnostics:
+        lines += [
+            "## Tracker diagnostics",
+            "",
+            "| Sequence | Ego-motion failures | Camera shift px (median / p95) | Innovation (median / p95, box sizes) |",
+            "|---|---|---|---|",
+        ]
+        for sid, d in metric_card.tracker_diagnostics.items():
+            fails = f"{d['ego_failures']}/{d['ego_estimates']}" if d.get("ego_motion") else "off"
+            lines.append(
+                f"| {sid} | {fails} | {fmt(d.get('camera_shift_px_median'), '.1f')} / {fmt(d.get('camera_shift_px_p95'), '.1f')} | "
+                f"{fmt(d.get('innovation_median'), '.2f')} / {fmt(d.get('innovation_p95'), '.2f')} |"
+            )
+        lines.append("")
     if metric_card.latency_by_stage:
         lines += ["## Latency by stage", "", "| Stage | Mean ms | p95 ms |", "|---|---|---|"]
         for stage, stats in metric_card.latency_by_stage.items():
