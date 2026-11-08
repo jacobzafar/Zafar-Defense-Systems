@@ -1,0 +1,13 @@
+# eval/track_sweep.py grid — docs/DECISIONS.md #27 Phase 3b: box choice within the gate, chosen ON VAL (never test).
+# Everything fixed at the Phase 3a choice (eval/config/kalman_sweep_grid.yaml); only `prefer` varies.
+# Selection rule, fixed before any result: `prefer: score` replaces `distance` only if its mean F1 over val clean
+# and val shake is >= distance's and it raises no false alarm on val's 10 empty frames in either set.
+grids:
+  - backend: [kalman]
+    ego_motion: [true]
+    low_threshold: [0.05]
+    confirm_hits: [1]
+    confirm_window: [3]
+    max_coast_output: [0]
+    vel_std: [0.025]
+    prefer: [distance, score]

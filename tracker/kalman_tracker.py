@@ -23,6 +23,11 @@ threshold.
      the confirmed tracks still unmatched — a low score can extend a
      track, never start one (ByteTrack's idea);
   3. unmatched high detections start tentative tracks.
+  Within a stage, `prefer: distance` matches each track to its nearest
+  gated detection; `prefer: score` to its highest-scoring gated one
+  (distance breaks ties). Several boxes often survive NMS around a small
+  drone, and the nearest to a poor prediction is not always the best
+  placed (DECISIONS #27: Sunny-late).
 - **Confirmation**: a tentative track is confirmed after `confirm_hits`
   matches within its first `confirm_window` frames, else dropped.
 - **Output**: confirmed tracks only, and only while they have been
@@ -97,6 +102,7 @@ class KalmanTracker(BaseTracker):
         ego_motion: bool = True,
         ego_fail_std_frac: float = 0.02,
         size_smoothing: float = 0.5,
+        prefer: str = "distance",
     ) -> None:
         if not 0.0 <= low_threshold <= high_threshold:
             raise ValueError(f"Need 0 <= low_threshold <= high_threshold, got {low_threshold}, {high_threshold}")
@@ -121,6 +127,9 @@ class KalmanTracker(BaseTracker):
         self.use_ego_motion = ego_motion
         self.ego_fail_std_frac = ego_fail_std_frac
         self.size_smoothing = size_smoothing
+        if prefer not in ("distance", "score"):
+            raise ValueError(f"prefer must be 'distance' or 'score', got {prefer!r}")
+        self.prefer = prefer
         self._estimator = EgoMotionEstimator() if ego_motion else None
         self.reset()
 
@@ -203,9 +212,11 @@ class KalmanTracker(BaseTracker):
         track.matched_box = box
 
     @staticmethod
-    def _greedy(costs: list[tuple[float, int, int]]) -> list[tuple[int, int]]:
+    def _greedy(costs: list[tuple]) -> list[tuple[int, int]]:
+        """Pairs in ascending order of the cost tuples' leading keys; each
+        tuple ends with (track index, detection index)."""
         pairs, used_t, used_d = [], set(), set()
-        for _cost, t, d in sorted(costs):
+        for *_keys, t, d in sorted(costs):
             if t not in used_t and d not in used_d:
                 pairs.append((t, d))
                 used_t.add(t)
@@ -241,7 +252,8 @@ class KalmanTracker(BaseTracker):
                 for d in det_idx:
                     cost = self._gated_cost(self._tracks[t], boxes[d])
                     if cost is not None:
-                        costs.append((cost, t, d))
+                        key = (-detections[d].confidence, cost) if self.prefer == "score" else (cost,)
+                        costs.append((*key, t, d))
             return self._greedy(costs)
 
         all_tracks = list(range(len(self._tracks)))

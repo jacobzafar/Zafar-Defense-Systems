@@ -160,3 +160,20 @@ def test_harness_runs_kalman_with_frames_and_scores_its_output(tmp_path):
     assert "tracker" in card.latency_by_stage
     table = render_tracks([("K", card.as_dict())], sequence="Clip#1-10").strip().splitlines()
     assert all(line.count("|") == table[0].count("|") for line in table)
+
+
+def test_prefer_score_picks_the_best_scored_box_in_the_gate():
+    """Two boxes around the drone after NMS: the nearer one to the
+    prediction scores lower. distance takes it, score takes the other."""
+
+    def run(prefer):
+        tracker = KalmanTracker(ego_motion=False, confirm_hits=1, confirm_window=1, prefer=prefer)
+        _run(tracker, [[_det(300, 180)], [_det(300, 180)]])
+        tracks = _run(tracker, [[_det(301, 180, score=0.5), _det(306, 182, score=0.9)]])[0]
+        return next(t for t in tracks if t.track_id == 1)  # the unchosen box starts its own track
+
+    near = run("distance")
+    best = run("score")
+    assert near.confidence == 0.5 and best.confidence == 0.9
+    with pytest.raises(ValueError):
+        KalmanTracker(prefer="iou")
