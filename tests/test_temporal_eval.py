@@ -236,3 +236,20 @@ def test_per_frame_tracks_are_snapshots_not_live_tracker_objects(tmp_path, monke
     assert card.track_quality["coverage"] == 1.0
     assert card.track_quality["false_track_boxes"]["target_frames"] == 0
     assert card.track_continuity["overall_continuity"] == 1.0
+
+
+def test_bench_latency_times_every_detector_every_round():
+    from eval.bench_latency import bench
+
+    class Counting:
+        def __init__(self):
+            self.calls = 0
+
+        def detect(self, frame):
+            self.calls += 1
+            return []
+
+    a, b = Counting(), Counting()
+    results = bench({"a": a, "b": b}, images=[None] * 4, rounds=3, warmup=2)
+    assert a.calls == b.calls == 2 + 4 * 3
+    assert set(results) == {"a", "b"} and results["a"]["median_ms"] >= 0

@@ -22,8 +22,10 @@ from __future__ import annotations
 from pathlib import Path
 
 import cv2
+import numpy as np
 
 from detector.base import BaseDetector, Detection
+from detector.input_norm import to_bgr8
 
 try:
     import torch
@@ -63,6 +65,12 @@ def _check_training_report(weights_file: Path, input_size: int, architecture: st
         )
 
 
+PREPROCESS_MODES = ("squeeze", "letterbox")
+RESIZE_INTERPOLATIONS = ("bilinear", "area")
+# ImageNet mean in RGB, the value the model's normalization maps to ~0.
+_LETTERBOX_FILL = (124, 116, 104)
+
+
 class DroneDetector(BaseDetector):
     """Single-class ("drone") SSDLite detector loaded from local weights."""
 
@@ -80,6 +88,8 @@ class DroneDetector(BaseDetector):
         input_size: int = 320,
         architecture: str = "ssdlite",
         anchor_scales: list[float] | None = None,
+        preprocess: str = "squeeze",
+        resize_interp: str = "bilinear",
     ) -> None:
         if not _TORCH_AVAILABLE:
             raise ImportError(
@@ -99,7 +109,22 @@ class DroneDetector(BaseDetector):
                 f"/ ultralytics)."
             )
 
+        if preprocess not in PREPROCESS_MODES:
+            raise ValueError(f"preprocess must be one of {PREPROCESS_MODES}, got {preprocess!r}")
+        if resize_interp not in RESIZE_INTERPOLATIONS:
+            raise ValueError(f"resize_interp must be one of {RESIZE_INTERPOLATIONS}, got {resize_interp!r}")
         self.confidence_threshold = confidence_threshold
+        # How a frame (or tile) becomes the square model input — DECISIONS #27.
+        # "squeeze" + "bilinear" is the original path: the full-resolution
+        # tensor goes to the model, whose transform resizes each axis to
+        # input_size with bilinear F.interpolate (no antialiasing).
+        # "area" resizes on the CPU first with cv2.INTER_AREA (an
+        # antialiasing box filter when downscaling). "letterbox" keeps the
+        # aspect ratio and pads to a square with the ImageNet mean. A
+        # non-square ("adaptive") input is not offered: torchvision's
+        # DefaultBoxGenerator stretches anchors with the input's aspect.
+        self.preprocess = preprocess
+        self.resize_interp = resize_interp
 
         # Local import to avoid a hard dependency on detector.train (and its
         # own guarded torch import chain) for callers that never select
@@ -151,10 +176,47 @@ class DroneDetector(BaseDetector):
         with torch.no_grad():
             self._model([self._preprocess(dummy)])
 
-    def _run_model(self, tensor, width: int, height: int) -> dict:
+    def _prepare(self, rgb):
+        """Model input for one RGB crop, and the (sx, sy, ox, oy) that maps
+        model-input coordinates back to the crop: crop = (input - o) / s."""
+        if self.preprocess == "squeeze" and self.resize_interp == "bilinear":
+            return torch.from_numpy(rgb).permute(2, 0, 1), (1.0, 1.0, 0.0, 0.0)
+        h, w = rgb.shape[:2]
+        size = self.input_size
+        if self.preprocess == "squeeze":
+            new_w, new_h = size, size
+        else:
+            scale = size / max(w, h)
+            new_w, new_h = max(1, round(w * scale)), max(1, round(h * scale))
+        downscale = new_w * new_h < w * h
+        interp = cv2.INTER_AREA if self.resize_interp == "area" and downscale else cv2.INTER_LINEAR
+        resized = cv2.resize(rgb, (new_w, new_h), interpolation=interp)
+        ox = oy = 0
+        if (new_w, new_h) != (size, size):
+            canvas = np.empty((size, size, 3), np.uint8)
+            canvas[:] = _LETTERBOX_FILL
+            ox, oy = (size - new_w) // 2, (size - new_h) // 2
+            canvas[oy : oy + new_h, ox : ox + new_w] = resized
+            resized = canvas
+        return torch.from_numpy(resized).permute(2, 0, 1), (new_w / w, new_h / h, float(ox), float(oy))
+
+    @staticmethod
+    def _to_crop(out: dict, mapping, crop_w: int, crop_h: int) -> torch.Tensor:
+        sx, sy, ox, oy = mapping
+        if mapping == (1.0, 1.0, 0.0, 0.0):
+            return out["boxes"]
+        boxes = (out["boxes"] - torch.tensor([ox, oy, ox, oy])) / torch.tensor([sx, sy, sx, sy])
+        return torch.stack(
+            [boxes[:, 0].clamp(0, crop_w), boxes[:, 1].clamp(0, crop_h), boxes[:, 2].clamp(0, crop_w), boxes[:, 3].clamp(0, crop_h)],
+            dim=1,
+        )
+
+    def _run_model(self, rgb, width: int, height: int) -> dict:
         if self.tile_rows * self.tile_cols == 1:
+            tensor, mapping = self._prepare(rgb)
             with torch.no_grad():
-                return self._model([self._preprocess(tensor)])[0]
+                out = self._model([self._preprocess(tensor)])[0]
+            return {**out, "boxes": self._to_crop(out, mapping, width, height)}
 
         from torchvision.ops import nms
 
@@ -163,12 +225,14 @@ class DroneDetector(BaseDetector):
         crops = tile_grid(width, height, self.tile_rows, self.tile_cols, self.tile_overlap)
         if self.tile_include_full_frame:
             crops = [(0, 0, width, height)] + crops
+        prepared = [self._prepare(rgb[y1:y2, x1:x2]) for (x1, y1, x2, y2) in crops]
         with torch.no_grad():
-            outputs = self._model([self._preprocess(tensor[:, y1:y2, x1:x2]) for (x1, y1, x2, y2) in crops])
+            outputs = self._model([self._preprocess(tensor) for tensor, _ in prepared])
 
         boxes, scores, labels = [], [], []
-        for (x1, y1, _x2, _y2), out in zip(crops, outputs):
-            boxes.append(out["boxes"] + torch.tensor([x1, y1, x1, y1], dtype=out["boxes"].dtype))
+        for (x1, y1, x2, y2), (_, mapping), out in zip(crops, prepared, outputs):
+            crop_boxes = self._to_crop(out, mapping, x2 - x1, y2 - y1)
+            boxes.append(crop_boxes + torch.tensor([x1, y1, x1, y1], dtype=crop_boxes.dtype))
             scores.append(out["scores"])
             labels.append(out["labels"])
         boxes, scores, labels = torch.cat(boxes), torch.cat(scores), torch.cat(labels)
@@ -179,11 +243,11 @@ class DroneDetector(BaseDetector):
         if frame is None:
             return []
 
+        frame = to_bgr8(frame)
         height, width = frame.shape[:2]
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        tensor = torch.from_numpy(rgb).permute(2, 0, 1)
 
-        output = self._run_model(tensor, width, height)
+        output = self._run_model(rgb, width, height)
 
         detections: list[Detection] = []
         for box, score, label in zip(output["boxes"], output["scores"], output["labels"]):

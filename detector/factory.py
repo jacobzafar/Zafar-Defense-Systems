@@ -54,6 +54,8 @@ def build_detector(config: dict[str, Any] | None = None) -> BaseDetector:
             input_size=config.get("input_size", 320),
             architecture=config.get("architecture", "ssdlite"),
             anchor_scales=config.get("anchor_scales"),
+            preprocess=config.get("preprocess", "squeeze"),
+            resize_interp=config.get("resize_interp", "bilinear"),
         )
 
     raise ValueError(

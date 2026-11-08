@@ -1,0 +1,29 @@
+# eval/harness.py config — docs/DECISIONS.md #27 Phase 1 (A1): preprocessing selection ON VAL, never on test.
+# stride-8 (#26 model, unchanged; RESEARCH ONLY), preprocess=letterbox, resize_interp=area.
+# Val = blocks 5 of each FPV scenario (tools/split_visiodect_fpv.py), frozen with:
+#   python -m eval.build_frozen_eval_set --source-dataset-dir data/visiodect/fpv-split/val \
+#       --eval-set-dir data/frozen_eval/visiodect-fpv-val
+# Val was also the early-stopping set of the #26 training run, so absolute numbers are optimistic;
+# it is used here only to rank preprocessing options.
+# Selection rule, fixed before any val result: a candidate replaces squeeze_bilinear only if val AP@0.5
+# and recall@0.35 are both >= the baseline's, no apparent-size bin's recall@0.35 drops by > 0.05, and no
+# clip's AP@0.5 drops by > 0.05. Among passing candidates, highest AP@0.5 wins.
+eval_set_dir: data/frozen_eval/visiodect-fpv-val
+detector:
+  backend: drone
+  weights_path: models/stride8_fpv/weights_best.pt
+  input_size: 640
+  architecture: ssdlite_stride8
+  anchor_scales: [0.025, 0.042036, 0.070682, 0.118848, 0.199836, 0.336014, 0.564989, 0.95]
+  confidence_threshold: 0.35
+  nms_thresh: 0.45
+  preprocess: letterbox
+  resize_interp: area
+tracker: {backend: iou}
+iou_threshold: 0.5
+small_object_area_px: 1024.0
+expected_checksum: a6215de2fbb48177cbc263851ae732c118bacec2e67a96ae31c1b0b222c710a2
+output_json_path: eval/output/fpv_val_stride8_letterbox_area_metric_card.json
+output_report_path: eval/output/fpv_val_stride8_letterbox_area_REPORT.md
+output_predictions_path: data/eval_predictions/fpv_val_stride8_letterbox_area.jsonl.gz
+sequence_grouping: filename_runs
