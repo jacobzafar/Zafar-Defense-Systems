@@ -1,0 +1,34 @@
+# detector/train.py config — docs/DECISIONS.md #27, workstream A2: PREPARED, NOT RUN.
+# Identical to config/stride8_fpv.yaml (#26) except `augment: sensor_dg` — per training image, random
+# simulated-sensor ops (resolution, noise, motion/optical blur, JPEG, tone/white balance, mono) from
+# detector/sensor_sim.sample_sensor_dg — and the output dir. Not trained: no GPU here, and by decision the
+# retrain belongs to January on own data; this file records the recipe so that run starts from it.
+#
+# CAVEAT: the augmentation families overlap the eval variants (eval/config/fpv_test_stride8_sim_*.yaml).
+# A model trained with this recipe would look better on those variants partly by construction. Real
+# cross-sensor generalization must be measured on footage from other, real cameras.
+# No polarity inversion: real IR needs real IR data, not inverted mono (the thermal proxy result in #27).
+#
+# PROVENANCE: as config/stride8_fpv.yaml — VisioDECT, license UNVERIFIED, research/feasibility only;
+# `--commercial-only` refuses it and the report records commercially_cleared: false. In January the same
+# recipe is meant for own data, with dataset_dir / dataset_name changed accordingly.
+dataset_dir: data/visiodect/fpv-split/train
+output_dir: models/stride8_fpv_sensor_dg
+target_class: drone
+val_fraction: 0.0
+val_dataset_dir: data/visiodect/fpv-split/val
+leakage_guard_eval_dirs:
+  - data/frozen_eval/visiodect-fpv-test
+architecture: ssdlite_stride8
+anchor_scales: [0.025, 0.042036, 0.070682, 0.118848, 0.199836, 0.336014, 0.564989, 0.95]  # geomspace(0.025, 0.95, 8)
+input_size: 640
+epochs: 30
+early_stopping_patience: 5
+batch_size: 8
+learning_rate: 0.001
+hflip_prob: 0.5
+augment: sensor_dg
+seed: 42
+device: auto
+dataset_name: visiodect
+purpose: research/feasibility (DECISIONS #27 A2) - not for commercial use

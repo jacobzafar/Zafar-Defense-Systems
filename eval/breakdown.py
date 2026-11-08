@@ -19,6 +19,10 @@ and per apparent-size bin:
 - recall@0.5 over every prediction (any score) — whether the detector
   puts a correct box on the drone at all — and at the operating threshold.
 
+`--by-sequence` splits each dump by the sequence part of its frame ids
+("<sequence>#<index>"), e.g. per clip of a `sequence_grouping:
+filename_runs` run.
+
 Usage:
     python -m eval.breakdown --dump Sunny=data/eval_predictions/fpv_sunny.jsonl.gz \\
         --dump Cloudy=... --dump Evening=... --threshold 0.35
@@ -54,6 +58,14 @@ def load_dump(path: str | Path) -> list[FrameEvalData]:
                 )
             )
     return frames
+
+
+def split_by_sequence(frames: list[FrameEvalData]) -> dict[str, list[FrameEvalData]]:
+    """Frames grouped by the sequence part of "<sequence>#<index>" frame ids, in order."""
+    groups: dict[str, list[FrameEvalData]] = {}
+    for frame in frames:
+        groups.setdefault(frame.frame_id.rsplit("#", 1)[0], []).append(frame)
+    return groups
 
 
 def _apparent(box) -> float:
@@ -108,16 +120,22 @@ def main() -> int:
     parser.add_argument("--dump", action="append", required=True, help="[LABEL=]path to a harness predictions dump")
     parser.add_argument("--threshold", type=float, default=0.35, help="Operating confidence threshold")
     parser.add_argument("--output-json", help="Also write the results as JSON here")
+    parser.add_argument("--by-sequence", action="store_true", help="One group per sequence id in each dump")
     args = parser.parse_args()
 
     results: dict[str, dict] = {}
     all_frames: list[FrameEvalData] = []
     for spec in args.dump:
         label, _, path = spec.rpartition("=")
+        label = label or Path(path).name
         frames = load_dump(path)
         all_frames += frames
-        results[label or Path(path).name] = summarize(frames, args.threshold)
-    if len(args.dump) > 1:
+        if args.by_sequence:
+            for sequence_id, group in split_by_sequence(frames).items():
+                results[f"{label} {sequence_id}" if len(args.dump) > 1 else sequence_id] = summarize(group, args.threshold)
+        else:
+            results[label] = summarize(frames, args.threshold)
+    if len(results) > 1:
         results = {"all": summarize(all_frames, args.threshold), **results}
     if args.output_json:
         Path(args.output_json).parent.mkdir(parents=True, exist_ok=True)

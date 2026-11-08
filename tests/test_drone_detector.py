@@ -142,3 +142,84 @@ def test_factory_passes_tiling_options_through(trained_weights_path):
         {"backend": "drone", "weights_path": str(trained_weights_path), "tile_rows": 3, "tile_cols": 3, "tile_overlap": 0.25}
     )
     assert (detector.tile_rows, detector.tile_cols, detector.tile_overlap, detector.tile_include_full_frame) == (3, 3, 0.25, True)
+
+
+class _FakeFixedBoxModel:
+    """Returns one box at fixed model-input coordinates and records inputs."""
+
+    def __init__(self, box):
+        self.box = box
+        self.shapes = []
+
+    def __call__(self, images):
+        import torch
+
+        self.shapes = [tuple(img.shape) for img in images]
+        return [{"boxes": torch.tensor([self.box]), "scores": torch.tensor([0.9]), "labels": torch.tensor([1])} for _ in images]
+
+
+def test_letterbox_pads_to_square_and_maps_boxes_back_through_the_padding(trained_weights_path):
+    import numpy as np
+
+    detector = DroneDetector(weights_path=str(trained_weights_path), confidence_threshold=0.0, preprocess="letterbox")
+    size = detector.input_size  # 320
+    # 640x320 frame -> scale 0.5 -> 320x160 content, padded by 80 rows top and bottom.
+    fake = _FakeFixedBoxModel([100.0, 100.0, 120.0, 110.0])
+    detector._model = fake
+    [d] = detector.detect(np.zeros((320, 640, 3), np.uint8))
+    assert fake.shapes == [(3, size, size)]
+    assert (d.x1 * 640, d.y1 * 320, d.x2 * 640, d.y2 * 320) == pytest.approx((200, 40, 240, 60))
+
+
+def test_area_squeeze_resizes_on_cpu_and_maps_per_axis(trained_weights_path):
+    import numpy as np
+
+    detector = DroneDetector(weights_path=str(trained_weights_path), confidence_threshold=0.0, resize_interp="area")
+    fake = _FakeFixedBoxModel([32.0, 160.0, 64.0, 192.0])
+    detector._model = fake
+    [d] = detector.detect(np.zeros((640, 1280, 3), np.uint8))
+    assert fake.shapes == [(3, 320, 320)]
+    assert (d.x1, d.y1, d.x2, d.y2) == pytest.approx((0.1, 0.5, 0.2, 0.6))
+
+
+def test_default_path_hands_the_full_resolution_frame_to_the_model(trained_weights_path):
+    import numpy as np
+
+    detector = DroneDetector(weights_path=str(trained_weights_path), confidence_threshold=0.0)
+    fake = _FakeFixedBoxModel([10.0, 10.0, 20.0, 20.0])
+    detector._model = fake
+    [d] = detector.detect(np.zeros((50, 100, 3), np.uint8))
+    assert fake.shapes == [(3, 50, 100)]
+    assert (d.x1, d.y1) == pytest.approx((0.1, 0.2))
+
+
+def test_detect_accepts_single_channel_frames(trained_weights_path):
+    import numpy as np
+
+    detector = DroneDetector(weights_path=str(trained_weights_path), confidence_threshold=0.0)
+    fake = _FakeFixedBoxModel([10.0, 10.0, 20.0, 20.0])
+    detector._model = fake
+    detector.detect(np.zeros((50, 100), np.uint16))
+    assert fake.shapes == [(3, 50, 100)]
+
+
+def test_invalid_preprocess_options_are_rejected(trained_weights_path):
+    with pytest.raises(ValueError, match="preprocess"):
+        DroneDetector(weights_path=str(trained_weights_path), preprocess="adaptive")
+    with pytest.raises(ValueError, match="resize_interp"):
+        DroneDetector(weights_path=str(trained_weights_path), resize_interp="lanczos")
+
+
+def test_tile_size_grids_portrait_and_landscape_frames_per_frame(trained_weights_path):
+    import numpy as np
+
+    from detector.tiling import tile_grid, tiles_for_size
+
+    detector = DroneDetector(weights_path=str(trained_weights_path), confidence_threshold=0.0, tile_size=100)
+    fake = _FakeTileModel()
+    detector._model = fake
+    for h, w in ((120, 300), (300, 120)):
+        detector.detect(np.zeros((h, w, 3), np.uint8))
+        rows, cols = tiles_for_size(h, 100, 0.2), tiles_for_size(w, 100, 0.2)
+        expected = [(h, w)] + [(y2 - y1, x2 - x1) for x1, y1, x2, y2 in tile_grid(w, h, rows, cols, 0.2)]
+        assert fake.crop_shapes == expected

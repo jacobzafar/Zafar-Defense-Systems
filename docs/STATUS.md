@@ -1,7 +1,7 @@
 # Project status
 
 **Zafar Defense Systems — Anti-UAV Detection Software MVP**
-*Generated from the actual state of `feature/software-mvp-scaffold`; fully refreshed 2026-10-10, when the detection work was **locked at a deliberate stopping point** (`docs/DECISIONS.md` #24). Observation-only: this repository contains no jamming, kinetic, or effector/turret-actuation logic anywhere, and none is planned in this branch.*
+*Generated from the actual state of `feature/temporal-robustness` (branched from `feature/software-mvp-scaffold`); refreshed 2026-11-08 after `docs/DECISIONS.md` #27. §§2–4 on DUT Anti-UAV are unchanged since #24; the FPV feasibility work (#25–#27) is in §2b. Observation-only: this repository contains no jamming, kinetic, or effector/turret-actuation logic anywhere, and none is planned in this branch.*
 
 This document describes what actually exists and runs in this repository
 today — not a roadmap, not a pitch. Every number below is either read
@@ -25,9 +25,12 @@ estimated.
 | `detector/drone_detector.py` | Single-class "drone" SSDLite, loads weights from `detector/train.py` (real fine-tuned weights in `models/dut_v1/`, gitignored — see §2). Optional **tiled inference** (overlapping crops + full frame, merged by NMS; **off by default**) and configurable `input_size`. |
 | `detector/train.py` | YAML-configured fine-tuning script for the drone-specific detector. Deterministic seeding, gradient clipping, structured hard-negative handling; resumes after interruption (per-epoch checkpoint + kept per-epoch weights), CUDA auto-detect, per-epoch validation AP. |
 | `detector/datasets/` | Unified dataset schema + registry (4 named public datasets) + license-provenance tracking (`license_id`/`commercial_ok`) + a concrete DUT Anti-UAV converter. |
-| `tracker/iou_tracker.py` | **Default** backend. Dependency-free greedy IoU tracker. No re-identification. |
+| `detector/ssdlite_stride8.py` | SSDLite with an added stride-8 level and geometric anchors (`architecture: ssdlite_stride8`, #26). Opt-in; the stock layout stays the default. |
+| `detector/input_norm.py`, `detector/sensor_sim.py` | Frame normalization (gray / 1-channel / BGRA / 16-bit / float → BGR8) and seeded simulated-sensor transforms used by the eval variants and the prepared `augment: sensor_dg` training recipe (#27). |
+| `tracker/iou_tracker.py` | **Default** backend. Dependency-free greedy IoU tracker. No re-identification. Coasts stale boxes for 15 frames (measured as ghost boxes in #27). |
+| `tracker/kalman_tracker.py`, `tracker/ego_motion.py` | Opt-in `kalman` backend (#27): camera-motion-compensated Kalman tracker with two-stage association. **Evaluated in the harness only; not wired into the CLI, UI or presets**, and the live detector threshold is unchanged. |
 | `tracker/bytetrack_adapter.py` | Optional Apache-2.0 ByteTrack/SORT family wrapper (Roboflow `trackers` package). |
-| `eval/` | The **only** place test-set accuracy numbers are produced: a frozen-eval-set harness computing threshold-independent AP@0.5, AP@[.50:.95], AP by object size, recall/precision at the operating threshold, small-object recall, false-alarm rate, latency, track continuity. `eval/select_checkpoint.py` ranks training epochs on validation. |
+| `eval/` | The **only** place test-set accuracy numbers are produced: a frozen-eval-set harness computing threshold-independent AP@0.5, AP@[.50:.95], AP by object size, recall/precision at the operating threshold, small-object recall, false-alarm rate, latency, track continuity. Since #27 also: clip view of frame-numbered sets, simulated-sensor and shake variants, false positives on drone frames, recall by apparent size, track quality, the tracker's output scored as the system's output. `eval/select_checkpoint.py` ranks training epochs on validation; `eval/track_sweep.py` chooses tracker parameters on val. |
 | `tools/preannotate.py` | Runs a detector over video/images, emits COCO-format pre-labels for human review — not a labeling tool itself. |
 | `tools/render_detections.py` | Draws predictions vs. ground truth onto real images/video for visual inspection — read-only, inference + drawing only. |
 | `telemetry/logger.py` | JSONL structured event logging per pipeline run. |
@@ -86,14 +89,51 @@ around:
 
 ---
 
+## 2b. FPV feasibility on VisioDECT (#25–#27) — research only
+
+All of this is **feasibility on public data**: VisioDECT DJIFPV (license
+`UNVERIFIED`, every model `commercially_cleared: false`), held-out
+blocks of the **same clips** used for training (in-domain, an upper bound
+for new footage). The real validation is the project's own data, planned
+for January 2027.
+
+- **#26, stride-8 detector, FPV-trained (pass with constraints).** Frozen
+  FPV test (720 frames, 662 drones, 58 empty): AP@0.5 **0.8627**, recall
+  0.829 / precision 0.888 at the 0.35 operating threshold, 0 false alarms
+  on 58 empty frames (a THIN figure). 7.4 FPS on this CPU, below the
+  12 FPS real-time floor.
+- **#27, temporal tracking — Kalman tracker: keep (as feasibility).**
+  Scored on what the tracker shows (IoU 0.5), test: recall **0.882** at
+  precision **0.890**, vs. 0.829 / 0.888 for the detector alone and
+  0.846 / 0.187 for the current IoU tracker's output. Under synthetic
+  shake, track continuity 0.785 vs. 0.330 for the IoU tracker. Cost
+  ~5 ms/frame. The 77 → 0 false alarms on empty frames is against the
+  **old IoU tracker's output** (ghost boxes); the detector alone was
+  already at 0. Parameters were chosen on val; test was run once.
+- **Where it does not help:** Sunny-late (small drones against empty
+  sky) stays at recall 0.425. Image-based camera-motion estimation fails
+  on every frame there — there is nothing in the sky to measure against.
+  A deployed PTZ/gimbal mount's own pan/tilt/IMU telemetry is the
+  intended replacement. The thermal-proxy variant is a zero result: real
+  IR needs real IR data.
+- **Measured and dropped or deferred (#27):** letterbox / adaptive input
+  (dropped); tiled inference (dropped on val — recovers small drones but
+  ~40× the false positives; code option kept); area resize (opt-in, 13%
+  faster, accuracy-neutral); `prefer: score` box choice (opt-in, could
+  not be validated on this data); motion cue + fusion and the
+  `sensor_dg` training recipe (prepared/deferred to January).
+
+---
+
 ## 3. What is NOT proven, or not measurable — and why
 
-- **False-alarm rate: not measurable on the current eval set.** DUT
-  Anti-UAV's test split has **zero hard-negative (no-drone) images** —
-  every one of its 2200 images contains at least one labeled UAV. The
-  false-alarm-rate metric is defined against hard-negative frames and
-  has literally never been exercised against real data.
-- **Track continuity: not measurable on the current eval set.** The
+- **False-alarm rate: not measurable on DUT, THIN on FPV, never against
+  real clutter.** DUT Anti-UAV's test split has **zero hard-negative
+  (no-drone) images**. The FPV test set has 58 empty frames from two
+  clips; no birds, planes or clouds-as-clutter exist in any eval set, so
+  the false-alarm cost of temporal tracking against real clutter — and
+  the value of track confirmation — is **unmeasured** (#27).
+- **Track continuity: measurable on FPV clips only (#27), not on DUT.** The
   detection subset is a bag of independent static images with no
   temporal relationship between them; the frozen eval set wraps each as
   its own single-frame "sequence" (the honest representation of that,
@@ -102,20 +142,13 @@ around:
   perfect. DUT Anti-UAV's separate **tracking subset** (20 real
   multi-frame sequences) would make this measurable — **it has not been
   downloaded or ingested in this branch.**
-- **IR/night imagery: not evaluated.** DUT Anti-UAV is visible-light
-  only. No infrared/thermal data has been sourced, converted, or
-  evaluated anywhere in this repo.
-- **FPV-class / very-small / high-speed targets: not specifically
-  evaluated, and small targets are a known architecture limit.** Small-
-  drone AP@0.5 on DUT is 0.002 with or without tiling, for the measured
-  reason in §2. VisioDECT (see `docs/
-  datasets.md`) has been ingested and does include a `DJIFPV` model
-  category, but it has not been trained or evaluated on yet, and its own
-  box-size distribution skews *larger*, not smaller, than DUT
-  Anti-UAV's — measured directly, only ~15% of its instances fall under
-  the same 1024px² "small" threshold, vs. 37.8-53.5% for DUT Anti-UAV.
-  Treat "FPV data exists in this repo" and "small/FPV-class coverage is
-  solved" as two separate claims — only the first is currently true.
+- **IR/night imagery: not evaluated.** No infrared/thermal data has been
+  sourced, converted, or evaluated anywhere in this repo. #27's
+  "thermal proxy" (inverted low-res mono) is not IR and scored ~0.
+- **FPV-class targets: evaluated in-domain on VisioDECT only (§2b).**
+  Not on own footage, not on other cameras: cross-sensor robustness was
+  measured only on *simulated* sensor variants of the same frames (#27).
+  Small-drone AP@0.5 on DUT remains 0.002 with the stock model (§2).
 - **Real-world (non-benchmark) footage: never evaluated.** Every real
   number above comes from a static-image research benchmark, not live
   camera footage, a real deployment environment, or footage resembling
@@ -137,7 +170,7 @@ Full detail: **`docs/datasets.md`**. Summary:
 | Dataset | Status | License (`license_id`) | `commercial_ok` |
 |---|---|---|---|
 | DUT Anti-UAV (detection subset) | **Downloaded, converted, in active use** | `UNVERIFIED` | `unknown` |
-| VisioDECT | **Ingested (8174 images, 3 of 6 documented UAV models), not yet trained on** — see `docs/datasets.md` | `UNVERIFIED` — no license file found anywhere in the supplied archive | `unknown` |
+| VisioDECT | **Ingested; DJIFPV trained on and evaluated for research/feasibility only (#26, #27)** — see `docs/datasets.md` | `UNVERIFIED` — no license file found anywhere in the supplied archive | `unknown` |
 | Anti-UAV | Registry placeholder only, no data | `UNVERIFIED` | `unknown` |
 | Drone-vs-Bird | Registry placeholder only, no data | `UNVERIFIED` | `unknown` |
 
@@ -168,19 +201,35 @@ extra, never installed or imported by default.
 
 ## 5. Repository facts
 
-- **Tests:** 209 passing, 0 failing (with the optional
+- **Tests:** 320 passing, 0 failing (with the optional
   `torch`/`torchvision` extra installed; some are skipped without it).
-  `python -m pytest tests/ -q`, run 2026-10-10.
-- **Branch:** `feature/software-mvp-scaffold`, 39 commits before this
-  update, 30 ahead of `main`.
-- **Push status:** in sync with `origin/feature/software-mvp-scaffold`
-  as of this update.
+  `python -m pytest tests/ -q`, run 2026-11-08.
+- **Branch:** `feature/temporal-robustness`, 8 commits on top of
+  `feature/software-mvp-scaffold` (which is in sync with its origin).
+  Not merged: the Kalman tracker is not integrated into the product yet.
 - **License audit:** passing (`scripts/license_audit.py`) — no copyleft
   package in the core install path.
 
 ---
 
-## 6. Detection work: a finished chapter, and what reopens it
+## 6. Next: own data in January
+
+`docs/DECISIONS.md` #27 holds the full plan. In short: own footage with
+hard negatives (birds, clouds, shake) to measure temporal false-alarm
+cost and track confirmation; camera-motion compensation from PTZ/gimbal
+telemetry, then motion cue + fusion; retraining on own data (`sensor_dg`
+augmentation, letterbox, tile/native-scale training for small objects);
+cross-sensor tests on real other cameras including real IR; real-time
+on GPU/target hardware. Wiring `kalman` into the CLI/UI/presets (and
+lowering the live detector threshold to match it) is a deliberate later
+step, together with that retraining; until then the live detector stays
+the validated baseline.
+
+The section below is the status as of #24 (DUT Anti-UAV), kept for the
+record; its lever 1 (own FPV footage) and lever 3 (stride-8) were since
+taken up on VisioDECT in #25–#26.
+
+## 6a. Detection work as of #24: a finished chapter, and what reopens it
 
 The detection work is **locked at a deliberate stopping point**
 (`docs/DECISIONS.md` #24), not abandoned. It ends with a corrected,

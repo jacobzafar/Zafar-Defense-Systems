@@ -34,3 +34,17 @@ def test_3x3_tiles_cover_the_frame_and_overlap():
 def test_invalid_grid_raises(rows, cols, overlap):
     with pytest.raises(ValueError):
         tile_grid(100, 100, rows, cols, overlap)
+
+
+def test_tiles_for_size_picks_the_fewest_tiles_no_larger_than_the_target():
+    from detector.tiling import tile_grid, tiles_for_size
+
+    assert tiles_for_size(640, 640, 0.2) == 1
+    assert tiles_for_size(2400, 640, 0.2) == 5
+    assert tiles_for_size(1080, 640, 0.2) == 2
+    for length in (720, 1080, 1280, 2400):
+        n = tiles_for_size(length, 640, 0.2)
+        spans = tile_grid(length, 1, 1, n, 0.2)
+        assert max(x2 - x1 for x1, _, x2, _ in spans) <= 641
+        if n > 1:
+            assert length / ((n - 1) - (n - 2) * 0.2) > 640  # one fewer would be too big

@@ -1,0 +1,26 @@
+# eval/harness.py config — docs/DECISIONS.md #27 Phase 2 (A3): tiled inference at full resolution, selection ON VAL.
+# stride-8 (#26 model, unchanged; RESEARCH ONLY). Tiles of at most 960 px per side (grid computed per frame,
+# 20% overlap) plus the full frame, merged with NMS. Compare with fpv_val_stride8_squeeze_bilinear.yaml.
+# Selection rule, fixed before any val result: the Phase 1 accuracy rule (AP@0.5 and recall@0.35 >= baseline,
+# no size bin's recall@0.35 -0.05, no clip's AP -0.05); best passing AP goes to test once. Expected (stated in
+# advance): little or no gain — untiled stride-8 already reaches recall 0.83 at 0-2% on test — at ~5-10x latency.
+eval_set_dir: data/frozen_eval/visiodect-fpv-val
+detector:
+  backend: drone
+  weights_path: models/stride8_fpv/weights_best.pt
+  input_size: 640
+  architecture: ssdlite_stride8
+  anchor_scales: [0.025, 0.042036, 0.070682, 0.118848, 0.199836, 0.336014, 0.564989, 0.95]
+  confidence_threshold: 0.35
+  nms_thresh: 0.45
+  tile_size: 960
+  tile_overlap: 0.2
+  tile_include_full_frame: true
+tracker: {backend: iou}
+iou_threshold: 0.5
+small_object_area_px: 1024.0
+expected_checksum: a6215de2fbb48177cbc263851ae732c118bacec2e67a96ae31c1b0b222c710a2
+output_json_path: eval/output/fpv_val_stride8_tiled960_metric_card.json
+output_report_path: eval/output/fpv_val_stride8_tiled960_REPORT.md
+output_predictions_path: data/eval_predictions/fpv_val_stride8_tiled960.jsonl.gz
+sequence_grouping: filename_runs

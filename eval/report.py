@@ -86,6 +86,8 @@ def render_report_md(metric_card: "MetricCard", config: "EvalConfig") -> str:
             lines.append(f"| {seq['sequence_id']} | {seq['id_switches']} | {seq['gt_present_frames']} | {continuity_str} |")
         lines.append("")
 
+    lines += _extended_sections(metric_card, fmt)
+
     lines += [
         "",
         "## Baseline comparison",
@@ -103,3 +105,91 @@ def render_report_md(metric_card: "MetricCard", config: "EvalConfig") -> str:
     ]
 
     return "\n".join(lines)
+
+
+def _extended_sections(metric_card: "MetricCard", fmt) -> list[str]:
+    """Fields added for docs/DECISIONS.md #27; skipped when absent (older cards)."""
+    lines: list[str] = []
+    if metric_card.sensor_sim or metric_card.shake or metric_card.sequence_grouping != "none":
+        lines += [
+            "## Eval variant",
+            "",
+            f"- Sequence grouping: `{metric_card.sequence_grouping}`",
+            f"- Simulated sensor: `{metric_card.sensor_sim}`" if metric_card.sensor_sim else "- Simulated sensor: none (frames as stored)",
+            f"- Synthetic shake: `{metric_card.shake}`" if metric_card.shake else "- Synthetic shake: none",
+            "",
+        ]
+    fpt = metric_card.false_positives_on_target_frames
+    if fpt:
+        lines += [
+            "## False positives on frames with a drone",
+            "",
+            f"{fpt['num_false_positives']} unmatched detections at the operating point across "
+            f"{fpt['num_target_frames']} drone frames ({fmt(fpt['rate_per_frame'])} per frame).",
+            "",
+        ]
+    by_size = metric_card.recall_by_apparent_size
+    if by_size:
+        lines += [
+            "## By apparent size (sqrt of box area / frame area)",
+            "",
+            "| Apparent size | Drones | AP@0.5 | Recall, any score | Recall @ operating point |",
+            "|---|---|---|---|---|",
+        ]
+        for name, row in by_size.items():
+            if row:
+                lines.append(
+                    f"| {name} | {row['count']} | {row['ap50']:.4f} | {row['recall_any_score']:.3f} | {fmt(row['recall_at_threshold'], '.3f')} |"
+                )
+        lines.append("")
+    tq = metric_card.track_quality
+    if tq and tq.get("measurable"):
+        ftb = tq["false_track_boxes"]
+        lines += [
+            "## Track quality",
+            "",
+            f"- Coverage (GT frames with a matching returned track): {fmt(tq['coverage'])}",
+            f"- GT presence runs: {tq['num_gt_runs']}, never tracked: {tq['runs_never_tracked']}",
+            f"- Frames to first track: mean {fmt(tq['frames_to_first_track_mean'], '.2f')}, max {tq['frames_to_first_track_max']}",
+            f"- Fragmentations: {tq['fragmentations']}",
+            f"- False track boxes: {ftb['target_frames']} on drone frames ({fmt(ftb['per_target_frame'])}/frame), "
+            f"{ftb['empty_frames']} on {ftb['num_empty_frames']} empty frames ({fmt(ftb['per_empty_frame'])}/frame)",
+            f"- Track IDs that never matched GT (false alerts): {tq['num_false_track_ids']}",
+            "",
+        ]
+    out = metric_card.track_output
+    if out:
+        op, fa = out["operating_point"], out["false_alarm_rate"]
+        lines += [
+            "## Tracker output (system view)",
+            "",
+            "Every box the tracker returns, scored like a detection (IoU "
+            f"{op['iou_threshold']}, no further cutoff): recall {fmt(op['recall'])} ({op['num_true_positives']}/{op['num_gt_boxes']}), "
+            f"precision {fmt(op['precision'])}, {out['false_positives_on_target_frames']['num_false_positives']} false boxes on drone frames, "
+            f"{fa['num_false_alarms']} on {fa['num_hard_negative_frames']} empty frames.",
+            "",
+            "| Sequence | Recall | Precision | False boxes |",
+            "|---|---|---|---|",
+            *(f"| {sid} | {fmt(s['recall'])} | {fmt(s['precision'])} | {s['num_false_positives']} |" for sid, s in out["per_sequence"].items()),
+            "",
+        ]
+    if metric_card.tracker_diagnostics:
+        lines += [
+            "## Tracker diagnostics",
+            "",
+            "| Sequence | Ego-motion failures | Camera shift px (median / p95) | Innovation (median / p95, box sizes) |",
+            "|---|---|---|---|",
+        ]
+        for sid, d in metric_card.tracker_diagnostics.items():
+            fails = f"{d['ego_failures']}/{d['ego_estimates']}" if d.get("ego_motion") else "off"
+            lines.append(
+                f"| {sid} | {fails} | {fmt(d.get('camera_shift_px_median'), '.1f')} / {fmt(d.get('camera_shift_px_p95'), '.1f')} | "
+                f"{fmt(d.get('innovation_median'), '.2f')} / {fmt(d.get('innovation_p95'), '.2f')} |"
+            )
+        lines.append("")
+    if metric_card.latency_by_stage:
+        lines += ["## Latency by stage", "", "| Stage | Mean ms | p95 ms |", "|---|---|---|"]
+        for stage, stats in metric_card.latency_by_stage.items():
+            lines.append(f"| {stage} | {stats['mean_ms']:.2f} | {stats['p95_ms']:.2f} |")
+        lines.append("")
+    return lines

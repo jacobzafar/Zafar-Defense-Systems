@@ -36,3 +36,13 @@ def test_threshold_cuts_operating_recall_only(tmp_path):
     result = breakdown.summarize(breakdown.load_dump(_dump(tmp_path / "p.jsonl.gz", rows)), threshold=0.35)
     assert result["all"]["recall_any_score"] == 1.0 and result["all"]["recall_at_threshold"] == 0.0
     assert result["all"]["ap50"] == pytest.approx(1.0)
+
+
+def test_split_by_sequence_uses_the_last_hash_as_the_index_separator():
+    from eval.breakdown import split_by_sequence
+    from eval.metrics import FrameEvalData
+
+    frames = [FrameEvalData(i, [], []) for i in ("Sunny#841-960#0", "Sunny#841-960#1", "Cloudy#241-360#0")]
+    groups = split_by_sequence(frames)
+    assert list(groups) == ["Sunny#841-960", "Cloudy#241-360"]
+    assert len(groups["Sunny#841-960"]) == 2
