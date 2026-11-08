@@ -20,10 +20,11 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import sys
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +34,8 @@ import cv2  # noqa: E402
 import yaml  # noqa: E402
 
 from detector.factory import build_detector  # noqa: E402
+from detector.sensor_sim import apply_sensor, apply_shake, frame_rng, validate_ops  # noqa: E402
+from eval.breakdown import summarize as summarize_by_apparent_size  # noqa: E402
 from eval.metrics import (  # noqa: E402
     FrameEvalData,
     PredBox,
@@ -40,10 +43,12 @@ from eval.metrics import (  # noqa: E402
     compute_ap50_95,
     compute_ap_by_size,
     compute_false_alarm_rate,
+    compute_fp_on_target_frames,
     compute_latency_stats,
     compute_recall_at_threshold,
     compute_small_object_recall,
     compute_track_continuity,
+    compute_track_quality,
 )
 from eval.report import render_report_md  # noqa: E402
 from eval.schema import (  # noqa: E402
@@ -53,6 +58,7 @@ from eval.schema import (  # noqa: E402
     load_eval_manifest,
     verify_checksum,
 )
+from eval.sequences import SEQUENCE_GROUPINGS, apply_grouping  # noqa: E402
 from tracker.factory import build_tracker  # noqa: E402
 
 
@@ -76,6 +82,27 @@ class EvalConfig:
     # carry (eval/breakdown.py). Off by default: tiled runs emit ~300
     # boxes/frame.
     output_predictions_path: str | None = None
+    # Temporal view (eval/sequences.py): "none" = sequences.json as stored;
+    # "filename_runs" = regroup frames into clips by "(n)" frame numbers,
+    # without touching the manifest. Detector and tracker reset per sequence.
+    sequence_grouping: str = "none"
+    # Simulated sensor (detector/sensor_sim.py): ordered ops applied to each
+    # frame after loading, outside the latency timer; seeded per frame.
+    sensor_sim: list[dict[str, Any]] | None = None
+    # Synthetic camera shake: {"amplitude_frac": 0.02, "seed": 0}. Ground
+    # truth is shifted with the frame.
+    shake: dict[str, Any] | None = None
+    sensor_seed: int = 0
+
+    def __post_init__(self) -> None:
+        if self.sequence_grouping not in SEQUENCE_GROUPINGS:
+            raise EvalConfigError(
+                f"sequence_grouping must be one of {', '.join(SEQUENCE_GROUPINGS)}, got {self.sequence_grouping!r}"
+            )
+        if self.sensor_sim:
+            validate_ops(self.sensor_sim)
+        if self.shake is not None and "amplitude_frac" not in self.shake:
+            raise EvalConfigError("shake needs an 'amplitude_frac'")
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "EvalConfig":
@@ -104,6 +131,15 @@ class MetricCard:
     track_continuity: dict[str, Any]
     manifest_checksum: str
     evaluated_at: str
+    # Added for the temporal / robustness experiment (docs/DECISIONS.md #27);
+    # defaults keep older callers (and cards) valid.
+    false_positives_on_target_frames: dict[str, Any] = field(default_factory=dict)
+    recall_by_apparent_size: dict[str, Any] = field(default_factory=dict)
+    track_quality: dict[str, Any] = field(default_factory=dict)
+    latency_by_stage: dict[str, dict[str, float]] = field(default_factory=dict)
+    sequence_grouping: str = "none"
+    sensor_sim: list[dict[str, Any]] | None = None
+    shake: dict[str, Any] | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -124,7 +160,7 @@ def run_evaluation(config: EvalConfig) -> MetricCard:
     if config.expected_checksum:
         verify_checksum(eval_set_dir, config.expected_checksum)
 
-    sequences = load_eval_manifest(eval_set_dir)
+    sequences = apply_grouping(load_eval_manifest(eval_set_dir), config.sequence_grouping)
     if not sequences:
         raise ValueError(f"No sequences found in eval set: {eval_set_dir}")
 
@@ -151,20 +187,30 @@ def run_evaluation(config: EvalConfig) -> MetricCard:
     all_frame_eval_data: list[FrameEvalData] = []
     frame_sizes: list[tuple[int, int]] = []
     latencies_ms: list[float] = []
+    stage_ms: dict[str, list[float]] = {}
     tracks_by_sequence: dict[str, list[list]] = {}
+    evaluated_sequences = []
 
     for sequence in sequences:
         tracker = build_tracker(config.tracker)
+        reset = getattr(detector, "reset", None)
+        if callable(reset):
+            reset()
         per_frame_tracks = []
+        evaluated_frames = []
 
         for frame in sequence.frames:
             image = cv2.imread(str(frame.image_path))
             if image is None:
                 raise FileNotFoundError(f"Could not read eval image: {frame.image_path}")
+            image, frame = simulate_sensor(image, frame, config)
+            evaluated_frames.append(frame)
 
             start = time.perf_counter()
             detections = detector.detect(image)
             latencies_ms.append((time.perf_counter() - start) * 1000.0)
+            for stage, ms in (getattr(detector, "last_stage_ms", None) or {}).items():
+                stage_ms.setdefault(stage, []).append(ms)
 
             pred_boxes = [
                 PredBox(
@@ -186,9 +232,12 @@ def run_evaluation(config: EvalConfig) -> MetricCard:
             )
 
             tracks = tracker.update(at_operating_point(detections))
-            per_frame_tracks.append(tracks)
+            # Snapshot: trackers update Track objects in place, so storing the
+            # live objects would give every frame the tracks' final positions.
+            per_frame_tracks.append([copy.copy(track) for track in tracks])
 
         tracks_by_sequence[sequence.sequence_id] = per_frame_tracks
+        evaluated_sequences.append(replace(sequence, frames=evaluated_frames))
 
     if config.output_predictions_path:
         write_predictions(config.output_predictions_path, all_frame_eval_data, frame_sizes)
@@ -210,7 +259,14 @@ def run_evaluation(config: EvalConfig) -> MetricCard:
     false_alarm_rate = compute_false_alarm_rate(operating_frames)
     latency = compute_latency_stats(latencies_ms)
     track_continuity = compute_track_continuity(
-        sequences, tracks_by_sequence, iou_threshold=config.track_continuity_iou_threshold
+        evaluated_sequences, tracks_by_sequence, iou_threshold=config.track_continuity_iou_threshold
+    )
+    track_quality = compute_track_quality(
+        evaluated_sequences, tracks_by_sequence, iou_threshold=config.track_continuity_iou_threshold
+    )
+    fp_on_target = compute_fp_on_target_frames(operating_frames, iou_threshold=config.iou_threshold)
+    recall_by_apparent_size = summarize_by_apparent_size(
+        normalized_frames(all_frame_eval_data, frame_sizes), operating_threshold
     )
 
     return MetricCard(
@@ -229,7 +285,57 @@ def run_evaluation(config: EvalConfig) -> MetricCard:
         track_continuity=track_continuity,
         manifest_checksum=manifest_checksum,
         evaluated_at=time.strftime("%Y-%m-%dT%H:%M:%S"),
+        false_positives_on_target_frames=fp_on_target,
+        recall_by_apparent_size=recall_by_apparent_size,
+        track_quality=track_quality,
+        latency_by_stage={stage: compute_latency_stats(values) for stage, values in stage_ms.items()},
+        sequence_grouping=config.sequence_grouping,
+        sensor_sim=config.sensor_sim,
+        shake=config.shake,
     )
+
+
+def simulate_sensor(image, frame, config: EvalConfig):
+    """Apply the config's simulated sensor and shake to one loaded frame;
+    returns the frame image and its EvalFrame (GT shifted with any shake).
+    Seeded by file name, so a variant is identical on every run."""
+    if not config.sensor_sim and config.shake is None:
+        return image, frame
+    key = frame.image_path.name
+    if config.sensor_sim:
+        image = apply_sensor(image, config.sensor_sim, frame_rng(config.sensor_seed, key))
+    if config.shake is not None:
+        rng = frame_rng(config.shake.get("seed", 0), "shake:" + key)
+        # Offsets are drawn in the (possibly resized) image; GT stays in original pixels.
+        sx, sy = frame.width / image.shape[1], frame.height / image.shape[0]
+        image, (dx, dy) = apply_shake(image, rng, config.shake["amplitude_frac"])
+        frame = replace(frame, boxes=[_shift_box(b, dx * sx, dy * sy, frame.width, frame.height) for b in frame.boxes])
+        frame = replace(frame, boxes=[b for b in frame.boxes if b.area > 0])
+    return image, frame
+
+
+def _shift_box(box, dx: float, dy: float, width: int, height: int):
+    return replace(
+        box,
+        x1=min(max(box.x1 + dx, 0.0), width),
+        y1=min(max(box.y1 + dy, 0.0), height),
+        x2=min(max(box.x2 + dx, 0.0), width),
+        y2=min(max(box.y2 + dy, 0.0), height),
+    )
+
+
+def normalized_frames(frames: list[FrameEvalData], sizes: list[tuple[int, int]]) -> list[FrameEvalData]:
+    """Frame-normalized copies (x / width, y / height), as eval/breakdown.py expects."""
+    out = []
+    for frame, (w, h) in zip(frames, sizes):
+        out.append(
+            FrameEvalData(
+                frame_id=frame.frame_id,
+                gt_boxes=[replace(g, x1=g.x1 / w, y1=g.y1 / h, x2=g.x2 / w, y2=g.y2 / h) for g in frame.gt_boxes],
+                pred_boxes=[PredBox(p.x1 / w, p.y1 / h, p.x2 / w, p.y2 / h, p.confidence) for p in frame.pred_boxes],
+            )
+        )
+    return out
 
 
 def write_predictions(path: str | Path, frames: list[FrameEvalData], sizes: list[tuple[int, int]]) -> None:

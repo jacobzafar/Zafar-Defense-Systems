@@ -38,6 +38,13 @@ Metric definitions (fixed here so results are comparable run to run):
   A gap where the GT drone leaves and later returns does not itself count
   as a switch — only a change in track ID while GT presence is
   uninterrupted counts.
+- **False positives on target frames**: operating-point predictions left
+  unmatched on frames that contain a drone, per such frame — the clutter
+  measure where empty frames are few (compute_fp_on_target_frames).
+- **Track quality**: coverage, frames to first track, fragmentation and
+  false tracks of the tracker's returned tracks (compute_track_quality).
+- **Recall by apparent size**: eval/breakdown.summarize, on
+  sqrt(box_w/frame_w * box_h/frame_h) bins.
 """
 
 from __future__ import annotations
@@ -429,4 +436,142 @@ def compute_track_continuity(
             "Every sequence in this eval set has at most 1 frame — an ID switch is "
             "structurally impossible to observe, so track continuity is not measurable here."
         ),
+    }
+
+
+def compute_fp_on_target_frames(frames: list[FrameEvalData], iou_threshold: float = 0.5) -> dict[str, Any]:
+    """False positives on frames that DO contain a drone: predictions left
+    unmatched (greedy, highest score first, IoU >= `iou_threshold`) after
+    each GT box takes its best prediction. Pass operating-point
+    predictions. The clutter signal on footage with few empty frames:
+    false-alarm rate (compute_false_alarm_rate) only sees zero-GT frames."""
+    target_frames = [f for f in frames if f.gt_boxes]
+    fp = 0
+    for frame in target_frames:
+        preds = sorted(frame.pred_boxes, key=lambda p: p.confidence, reverse=True)
+        ious = _iou_matrix(preds, frame.gt_boxes)
+        gt_matched = np.zeros(len(frame.gt_boxes), dtype=bool)
+        for row in range(len(preds)):
+            candidates = (~gt_matched) & (ious[row] >= iou_threshold)
+            if candidates.any():
+                gt_matched[int(np.argmax(np.where(candidates, ious[row], -1.0)))] = True
+            else:
+                fp += 1
+    return {
+        "measurable": bool(target_frames),
+        "rate_per_frame": (fp / len(target_frames)) if target_frames else None,
+        "num_target_frames": len(target_frames),
+        "num_false_positives": fp,
+    }
+
+
+def compute_track_quality(
+    sequences: list[EvalSequence],
+    tracks_by_sequence: dict[str, list[list]],
+    iou_threshold: float = 0.3,
+) -> dict[str, Any]:
+    """What an operator sees from the tracker's output (the tracks it
+    returns, i.e. confirmed tracks), per GT "presence run" — a maximal run
+    of consecutive frames with a GT drone — and on frames without one.
+
+    - `coverage`: share of GT-present frames on which some returned track
+      overlaps the GT box at IoU >= `iou_threshold`.
+    - `frames_to_first_track`: frames from the start of a presence run to
+      its first covered frame (0 = tracked on the first frame); runs never
+      covered are counted in `runs_never_tracked`, not averaged in. This
+      is the temporal cost of M-of-N confirmation.
+    - `fragmentations`: covered -> uncovered -> covered transitions within a
+      run (MOT "Frag").
+    - `false_track_boxes`: returned track boxes matching no GT, split into
+      target frames and empty frames (per frame), and
+      `num_false_track_ids`: track IDs that never match GT anywhere in
+      their sequence — pure false alerts.
+
+    `measurable` is False when every sequence has at most one frame.
+    """
+    measurable = any(len(s.frames) > 1 for s in sequences)
+
+    def box(track, frame):
+        return PredBox(track.x1 * frame.width, track.y1 * frame.height, track.x2 * frame.width, track.y2 * frame.height, track.confidence)
+
+    gt_present = covered = runs = never = fragmentations = 0
+    first_delays: list[int] = []
+    false_on_target = false_on_empty = target_frames = empty_frames = false_ids = 0
+    per_sequence = []
+
+    for sequence in sequences:
+        tracks_per_frame = tracks_by_sequence.get(sequence.sequence_id, [])
+        ids_seen: set[int] = set()
+        ids_matched: set[int] = set()
+        seq_cov = seq_gt = 0
+        run_flags: list[list[bool]] = []
+        in_run = False
+
+        for frame, tracks in zip(sequence.frames, tracks_per_frame):
+            gts = frame.gt_drone_boxes
+            matched_here = False
+            for track in tracks:
+                ids_seen.add(track.track_id)
+                hit = any(iou(box(track, frame), gt) >= iou_threshold for gt in gts)
+                if hit:
+                    ids_matched.add(track.track_id)
+                    matched_here = True
+                elif gts:
+                    false_on_target += 1
+                else:
+                    false_on_empty += 1
+            if gts:
+                target_frames += 1
+                seq_gt += 1
+                seq_cov += matched_here
+                if not in_run:
+                    run_flags.append([])
+                    in_run = True
+                run_flags[-1].append(matched_here)
+            else:
+                empty_frames += 1
+                in_run = False
+
+        for flags in run_flags:
+            runs += 1
+            if any(flags):
+                first_delays.append(flags.index(True))
+                segments = sum(1 for i, f in enumerate(flags) if f and (i == 0 or not flags[i - 1]))
+                fragmentations += segments - 1
+            else:
+                never += 1
+        seq_false_ids = len(ids_seen - ids_matched)
+        false_ids += seq_false_ids
+        gt_present += seq_gt
+        covered += seq_cov
+        per_sequence.append(
+            {
+                "sequence_id": sequence.sequence_id,
+                "gt_present_frames": seq_gt,
+                "coverage": (seq_cov / seq_gt) if seq_gt else None,
+                "frames_to_first_track": [f.index(True) if any(f) else None for f in run_flags],
+                "num_track_ids": len(ids_seen),
+                "num_false_track_ids": seq_false_ids,
+            }
+        )
+
+    return {
+        "measurable": measurable,
+        "iou_threshold": iou_threshold,
+        "coverage": (covered / gt_present) if measurable and gt_present else None,
+        "num_gt_runs": runs,
+        "runs_never_tracked": never,
+        "frames_to_first_track_mean": float(np.mean(first_delays)) if measurable and first_delays else None,
+        "frames_to_first_track_max": int(max(first_delays)) if measurable and first_delays else None,
+        "fragmentations": fragmentations,
+        "false_track_boxes": {
+            "target_frames": false_on_target,
+            "per_target_frame": (false_on_target / target_frames) if target_frames else None,
+            "empty_frames": false_on_empty,
+            "per_empty_frame": (false_on_empty / empty_frames) if empty_frames else None,
+            "num_empty_frames": empty_frames,
+        },
+        "num_false_track_ids": false_ids,
+        "per_sequence": per_sequence if measurable else [],
+        "note": None if measurable else "Every sequence has at most 1 frame — track quality is not measurable here.",
     }
